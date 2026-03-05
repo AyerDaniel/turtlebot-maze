@@ -1,0 +1,14 @@
+docker compose config --services
+
+
+4. Correct conceptual order
+
+Zenoh router first (communications must be available).
+
+Gazebo / demo-world-enhanced second (publishes sensor topics).
+
+SLAM third (subscribes to sensor topics and generates /map).
+
+Detector next (optional, needs sensor topics).
+
+Behaviors last, but must wait until /map exists.

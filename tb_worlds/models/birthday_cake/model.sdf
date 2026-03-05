@@ -1,0 +1,213 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <model name="birthday_cake">
+    <static>true</static>
+      <link name='link'>
+        <visual name='Layer1'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Layer1</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.6 0.2 0.1 1</ambient>
+            <diffuse>0.6 0.2 0.1 1</diffuse>
+            <specular>0.6 0.2 0.1 1</specular>
+            <!--<emissive>0.6 0.2 0.1 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Layer2'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Layer2</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.7 0.3 0.2 1</ambient>
+            <diffuse>0.6 0.2 0.1 1</diffuse>
+            <specular>0.6 0.2 0.1 1</specular>
+            <!--<emissive>0.6 0.2 0.1 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Layer3'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Layer3</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.5 0.2 0.1 1</ambient>
+            <diffuse>0.6 0.2 0.1 1</diffuse>
+            <specular>0.6 0.2 0.1 1</specular>
+            <!--<emissive>0.6 0.2 0.1 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Filling1'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Filling1</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>0.28 0.29 0.48 1</diffuse>
+            <specular>0.28 0.29 0.48 1</specular>
+            <!--<emissive>0.28 0.29 0.48 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Filling2'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Filling2</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>0.28 0.29 0.48 1</diffuse>
+            <specular>0.28 0.29 0.48 1</specular>
+            <!--<emissive>0.28 0.29 0.48 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Frosting1'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Frosting1</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.28 0.29 0.48 1</ambient>
+            <diffuse>0.28 0.29 0.48 1</diffuse>
+            <specular>0.9 0.9 1.0</specular>
+            <!--<emissive>0.28 0.29 0.48 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Frosting2'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Frosting2</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.28 0.29 0.48 1</ambient>
+            <diffuse>0.28 0.29 0.48 1</diffuse>
+            <specular>0.9 0.9 1.0</specular>
+            <!--<emissive>0.28 0.29 0.48 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Frosting3'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Frosting3</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.9 1</ambient>
+            <diffuse>0.8 0.8 0.9 1</diffuse>
+            <specular>0.9 0.9 1.0</specular>
+            <!--<emissive>0.8 0.8 0.9 1</emissive>-->
+          </material>
+        </visual>
+        <visual name='Sprinkles'>
+          <geometry>
+            <mesh>
+              <uri>meshes/cake.dae</uri>
+              <submesh>
+                <name>Sprinkles</name>
+              </submesh>
+              <scale>0.1 0.1 0.1</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.28 0.29 0.48 1</ambient>
+            <diffuse>0.28 0.29 0.48 1</diffuse>
+            <specular>0.9 0.9 1.0 1</specular>
+            <emissive>0.2 0.2 0.4 1</emissive>
+          </material>
+        </visual>
+        <visual name='OpenRobotics'>
+          <pose>-0.02 0 0.17 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>meshes/openrobotics.dae</uri>
+              <scale>5 5 5</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.28 0.29 0.48 1</ambient>
+            <diffuse>0.28 0.29 0.48 1</diffuse>
+            <specular>0.9 0.9 1.0 1</specular>
+          </material>
+        </visual>
+        <visual name='Candle1'>
+          <pose>0.0 0 0.17 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <length>0.1</length>
+              <radius>0.005</radius>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.9 1</ambient>
+            <diffuse>0.5 0.5 0.9 1</diffuse>
+            <specular>0.5 0.5 0.9 1</specular>
+          </material>
+        </visual>
+        <particle_emitter name="candle" type="ellipsoid">
+          <pose>0.0 0 0.23 0 -1.57 0</pose>
+          <emitting>true</emitting>
+          <size>0.02 0.02 0.04</size>
+          <particle_size>0.01 0.01 0.005</particle_size>
+          <lifetime>0.5</lifetime>
+          <min_velocity>0.1</min_velocity>
+          <max_velocity>0.2</max_velocity>
+          <scale_rate>0.01</scale_rate>
+          <rate>200</rate>
+          <color_range_image>materials/textures/fire_colors.png</color_range_image>
+          <!-- The material seems to override the color_range_image,
+               but without the material, the particles look like solid squares -->
+          <material>
+            <diffuse>0.9 0.3 0</diffuse>
+            <specular>1.0 1.0 1.0</specular>
+            <pbr>
+              <metal>
+                <albedo_map>materials/textures/fog.png</albedo_map>
+              </metal>
+            </pbr>
+          </material>
+        </particle_emitter>
+
+      </link>
+  </model>
+</sdf>

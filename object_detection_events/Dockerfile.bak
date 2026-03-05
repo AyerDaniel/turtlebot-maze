@@ -1,0 +1,9 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir eclipse-zenoh
+
+COPY object_detection_events.py .
+
+CMD ["python", "object_detection_events.py"]

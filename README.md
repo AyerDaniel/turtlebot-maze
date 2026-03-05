@@ -374,7 +374,7 @@ docker compose up zenoh-router zenoh-bridge
 docker compose up demo-slam
 ```
 
-Pose estimates are published over Zenoh on key `tb/slam/pose` as JSON.
+Pose estimates are published over Zenoh on key `/pose` as JSON.
 
 ### Data Flow
 

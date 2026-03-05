@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""
+Build an object-detection event pipeline from TurtleBot3 simulation through Zenoh into PostgreSQL.
+
+"""
+
+
+'''
+    Note: All print statements that should be displaye dtot he user must be flushed: i.e. print("thisn", flush=True)
+'''
+import zenoh
+import json
+import time
+import psycopg
+import cv2
+
+# Import db connect variables.
+from db_connect import *
+
+# Zenoh connection configuration
+conf = zenoh.Config()
+conf.insert_json5("connect/endpoints", '["tcp/localhost:7447"]')
+
+# Open Zenoh session
+try:
+    # Open Zenoh Session.
+    session = zenoh.open(conf)
+
+except Exception as e:
+
+    # Report error.
+    print(f"Failure creating Zenoh session:\nError{e}", flush=True)
+
+# Report state.
+print("Connected to Zenoh router.", flush=True)
+
+# Varaible for image callback.
+latest_image = None
+
+# Define show_image callback.
+def img_callback(sample):
+    global latest_image
+    import numpy as np
+
+    WIDTH = 320
+    HEIGHT = 240
+
+    payload_bytes = sample.payload.to_bytes()
+
+    # Take last image-sized chunk (safer than fixed 64)
+    IMAGE_SIZE = WIDTH * HEIGHT * 3
+    img_data = payload_bytes[-IMAGE_SIZE:]
+
+    img = np.frombuffer(img_data, dtype=np.uint8)
+
+    if img.size != IMAGE_SIZE:
+        print("Unexpected image size:", img.size, flush=True)
+        return
+
+    img = img.reshape((HEIGHT, WIDTH, 3))
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    latest_image = img
+
+    # cv2.imshow("Image", img)
+    # cv2.waitKey(1)
+
+    # Return image.
+    return latest_image
+
+# Define callback.
+def write_detections_(response):
+    '''
+        Callback for Zenoh Subscriber.
+    '''
+
+    # Get detections json.
+    detections = json.loads(response.payload.to_bytes())
+    
+    # If no detections do nothing.
+    if not detections:
+        return
+    
+    # Build sql to write detections to json.
+    write_row_sql = f"INSERT INTO {table} ("
+
+    # Strings for SQL write.
+    columns = ""
+    values = ""
+
+    # Iterate over json.
+    for key in detections[0]:
+
+        # Extend sql write.
+        match key:
+            case 'class':
+                
+                # Extend sql.
+                columns += f", {key}"
+                values += f", '{detections[0][key]}'"
+
+            case 'confidence':
+                
+                # Extend sql.
+                columns += f", {key}"
+                values += f", {detections[0][key]}"
+
+            case 'bbox':
+                
+                # Extend sql.
+                columns += f", {key}"
+                values += f", ARRAY{str([x for x in detections[0][key]])}"
+
+    # Get image.
+    image = session.get("camera/image_raw").value
+
+    # Append to write sql.  Lose leading commas.
+    write_row_sql += f"{columns[2:]}) VALUES ({values[2:]})"
+
+
+    # Testing 
+    print(write_row_sql)
+
+    # Connect to an database.
+    try:
+        with psycopg.connect(
+            f"dbname={dbname} user={user} password={password} host={host} port={port}"
+            ) as conn:
+
+            # Open a cursor to perform database operations
+            with conn.cursor() as cur:
+
+                # Write detections to table.
+                cur.execute(write_row_sql)
+
+                # Make the changes to the database persistent
+                conn.commit()
+    except Exception as e:
+
+        print(f"{e}", flush = True)
+
+# Declare Zenoh subscribers
+print("Subscribing to: camera/image_raw", flush=True)
+
+try:
+    sub_images = session.declare_subscriber("camera/image_raw", img_callback)
+
+except Exception as e:
+
+    print(f"{e}")
+
+print("Subscribing to: tb/detections", flush=True)
+
+try:
+
+    sub_detection = session.declare_subscriber("tb/detections")
+
+except Exception as e:
+
+    print(f"{e}")
+
+
+# Keep running, allowing Zenoh to handle callbacks
+try:
+    while True:
+        time.sleep(0.1)  # Yield control so Zenoh callbacks can run
+except KeyboardInterrupt:
+    print("Shutting down monitor...", flush=True)
+finally:
+    sub_detection.undeclare()
+    session.close()
+    print("Monitor stopped.", flush=True)

@@ -1,0 +1,23 @@
+services:
+  object_detection_events:
+    build: .
+    container_name: object_detection_events
+    network_mode: host
+    restart: unless-stopped
+    command: >
+      python3 object_detection_events.py
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: detect
+      POSTGRES_USER: detector
+      POSTGRES_DB: detections_db
+    ports:
+      - "5433:5432"   # Zenoh or something has port 5432 on the system end.  Change system listener port to 5433.
+    volumes:
+      - postgres-data:/var/lib/postgresql
+
+volumes:
+  postgres-data:
