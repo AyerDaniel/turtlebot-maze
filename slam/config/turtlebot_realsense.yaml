@@ -1,8 +1,14 @@
-# stella_vslam camera config for TurtleBot3 Waffle simulated RealSense R200
+# stella_vslam RGBD camera config for TurtleBot3 Waffle simulated D435i camera
 # Intrinsics derived from gz_waffle.sdf.xacro (horizontal_fov=1.047, 320x240)
+#
+# Used with: slam_bridge.py --mode rgbd --config turtlebot_realsense.yaml
+#
+# Depth arrives as float32 metres from Gazebo (32FC1 encoding via Gz bridge).
+# slam_bridge.py normalises all depth to float32 metres before sending to
+# run_slam, so depthmap_factor is 1.0 for both simulation and real D435i.
 
 Camera:
-  name: "TurtleBot3 Waffle RealSense R200 (simulated)"
+  name: "TurtleBot3 Waffle simulated D435i (RGBD)"
   setup: "RGBD"
   model: "perspective"
 
@@ -23,21 +29,28 @@ Camera:
   cols: 320
   rows: 240
 
-  # RGBD-specific
-  focal_x_baseline: 27.713
+  # slam_bridge.py delivers BGR frames (cv2 native ordering)
+  color_order: "BGR"
+
+  # depth_threshold: maximum depth in metres to use for mapping
+  # Matches Gazebo depth camera far clip (gz_waffle.sdf.xacro: <far>5.0</far>)
   depth_threshold: 5.0
-  color_order: "RGB"
+
+  # slam_bridge.py normalises depth to float32 metres; no additional scaling needed
+  depthmap_factor: 1.0
 
 Preprocessing:
-  min_size: 320
-  depthmap_factor: 1.0
+  # min_size must be <= min(cols, rows) = 240
+  min_size: 200
 
 Feature:
   name: "ORB for low-res simulation camera"
   scale_factor: 1.2
-  num_levels: 8
-  ini_fast_threshold: 20
-  min_fast_threshold: 7
+  # Fewer pyramid levels for low resolution — avoids sub-pixel patches
+  num_levels: 6
+  # Lower thresholds to get enough features on simulated images
+  ini_fast_threshold: 10
+  min_fast_threshold: 3
 
 Mapping:
   baseline_dist_thr: 0.1

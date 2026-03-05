@@ -14,8 +14,16 @@ find_package(nav2_minimal_tb4_sim REQUIRED)
 
 # Install directories
 install(DIRECTORY
-  launch maps models worlds urdf configs
+  launch maps models worlds urdf configs rviz
   DESTINATION share/${PROJECT_NAME}
+)
+
+# Portrait photos referenced by AWS residential DeskPortrait/Portrait models via
+# relative path ../../../../photos/ from their meshes directories.
+# Installs to share/photos/ (one level above share/${PROJECT_NAME}/).
+install(DIRECTORY
+  photos
+  DESTINATION share
 )
 
 ament_package()

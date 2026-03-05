@@ -85,10 +85,72 @@ services:
     extends: overlay
     environment:
       - GZ_SIM_RESOURCE_PATH=/overlay_ws/install/tb_worlds/share/tb_worlds/worlds:/overlay_ws/install/tb_worlds/share/tb_worlds/models
+    volumes:
+      # Override source-controlled files without rebuilding the overlay image.
+      # Remove these mounts once the overlay image is rebuilt with D435i changes.
+      - ./tb_worlds/configs/turtlebot3_bridge.yaml:/overlay_ws/install/tb_worlds/share/tb_worlds/configs/turtlebot3_bridge.yaml:ro
+      - ./tb_worlds/urdf/gz_waffle.sdf.xacro:/overlay_ws/install/tb_worlds/share/tb_worlds/urdf/gz_waffle.sdf.xacro:ro
+      - ./tb_worlds/rviz/nav2_turtlebot_view.rviz:/overlay_ws/install/tb_worlds/share/tb_worlds/rviz/nav2_turtlebot_view.rviz:ro
     command: >
       ros2 launch tb_worlds tb_demo_world.launch.py
       world_name:=sim_house_enhanced.sdf.xacro
       use_aruco:=True
+      rviz_config_file:=/overlay_ws/install/tb_worlds/share/tb_worlds/rviz/nav2_turtlebot_view.rviz
+
+  # House world — AWS RoboMaker Small House (Jazzy-compatible)
+  # Uses the same overlay image as demo-world-enhanced; no rebuild needed.
+  # Select this world with:  docker compose up demo-world-house
+  demo-world-house:
+    extends: overlay
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/overlay_ws/install/tb_worlds/share/tb_worlds/worlds:/overlay_ws/install/tb_worlds/share/tb_worlds/models
+    volumes:
+      # Inject new world files without rebuilding the overlay image.
+      - ./tb_worlds/worlds/house_world.sdf.xacro:/overlay_ws/install/tb_worlds/share/tb_worlds/worlds/house_world.sdf.xacro:ro
+      - ./tb_worlds/maps/house_world_map.pgm:/overlay_ws/install/tb_worlds/share/tb_worlds/maps/house_world_map.pgm:ro
+      - ./tb_worlds/maps/house_world_map.yaml:/overlay_ws/install/tb_worlds/share/tb_worlds/maps/house_world_map.yaml:ro
+      - ./tb_worlds/models:/overlay_ws/install/tb_worlds/share/tb_worlds/models:ro
+      - ./tb_worlds/photos:/overlay_ws/install/tb_worlds/share/photos:ro
+    command: >
+      ros2 launch tb_worlds tb_demo_world.launch.py
+      world_name:=house_world.sdf.xacro
+      map:=/overlay_ws/install/tb_worlds/share/tb_worlds/maps/house_world_map.yaml
+
+  # Bookstore world — AWS RoboMaker Bookstore (Gazebo Harmonic-compatible)
+  # Uses the same overlay image as all other worlds; no rebuild needed.
+  # Select this world with:  docker compose up demo-world-bookstore
+  demo-world-bookstore:
+    extends: overlay
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/overlay_ws/install/tb_worlds/share/tb_worlds/worlds:/overlay_ws/install/tb_worlds/share/tb_worlds/models
+    volumes:
+      # Inject new world files without rebuilding the overlay image.
+      - ./tb_worlds/worlds/bookstore_world.sdf.xacro:/overlay_ws/install/tb_worlds/share/tb_worlds/worlds/bookstore_world.sdf.xacro:ro
+      - ./tb_worlds/maps/bookstore_world_map.pgm:/overlay_ws/install/tb_worlds/share/tb_worlds/maps/bookstore_world_map.pgm:ro
+      - ./tb_worlds/maps/bookstore_world_map.yaml:/overlay_ws/install/tb_worlds/share/tb_worlds/maps/bookstore_world_map.yaml:ro
+      - ./tb_worlds/models:/overlay_ws/install/tb_worlds/share/tb_worlds/models:ro
+    command: >
+      ros2 launch tb_worlds tb_demo_world.launch.py
+      world_name:=bookstore_world.sdf.xacro
+      map:=/overlay_ws/install/tb_worlds/share/tb_worlds/maps/bookstore_world_map.yaml
+
+  # Warehouse world — AWS RoboMaker Small Warehouse, no-roof variant (Jazzy-compatible)
+  # Uses the same overlay image as all other worlds; no rebuild needed.
+  # Select this world with:  docker compose up demo-world-warehouse
+  demo-world-warehouse:
+    extends: overlay
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/overlay_ws/install/tb_worlds/share/tb_worlds/worlds:/overlay_ws/install/tb_worlds/share/tb_worlds/models
+    volumes:
+      # Inject new world files without rebuilding the overlay image.
+      - ./tb_worlds/worlds/warehouse_world.sdf.xacro:/overlay_ws/install/tb_worlds/share/tb_worlds/worlds/warehouse_world.sdf.xacro:ro
+      - ./tb_worlds/maps/warehouse_world_map.pgm:/overlay_ws/install/tb_worlds/share/tb_worlds/maps/warehouse_world_map.pgm:ro
+      - ./tb_worlds/maps/warehouse_world_map.yaml:/overlay_ws/install/tb_worlds/share/tb_worlds/maps/warehouse_world_map.yaml:ro
+      - ./tb_worlds/models:/overlay_ws/install/tb_worlds/share/tb_worlds/models:ro
+    command: >
+      ros2 launch tb_worlds tb_demo_world.launch.py
+      world_name:=warehouse_world.sdf.xacro
+      map:=/overlay_ws/install/tb_worlds/share/tb_worlds/maps/warehouse_world_map.yaml
 
   # Behavior demo using Python and py_trees
   demo-behavior-py:
@@ -112,6 +174,15 @@ services:
       detector_type:=${DETECTOR_TYPE:-hsv}
       target_object:=${TARGET_OBJECT:-cup}
 
+  # Foxglove WebSocket bridge — connects app.foxglove.dev to all ROS 2 topics
+  # Open https://app.foxglove.dev, choose "Open connection", WebSocket,
+  # enter ws://localhost:8765
+  foxglove-bridge:
+    extends: overlay
+    command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+    ports:
+      - "8765:8765"
+
   # Rosbridge WebSocket server for ros-mcp-server integration
   rosbridge:
     extends: overlay
@@ -119,12 +190,70 @@ services:
     ports:
       - "9090:9090"
 
-  # Zenoh router for cross-container pub/sub
+  # Zenoh router for cross-container pub/sub.
+  # Loads zenoh/zenoh-storage.json5 which enables the storage-manager plugin
+  # with an in-memory storage for tb/detections (queryable via get() within
+  # the session). REST admin API available at http://localhost:8000.
   zenoh-router:
     image: eclipse/zenoh:latest
     network_mode: host
     ipc: host
-    command: ["--adminspace-permissions", "rw"]
+    volumes:
+      - ./zenoh:/config:ro
+    command: ["--config", "/config/zenoh-storage.json5"]
+
+  # Persistent detection logger — subscribes to tb/detections and appends
+  # timestamped JSONL records to ./data/detections/detections.jsonl.
+  # Run alongside the detector service for dataset generation:
+  #   docker compose up zenoh-router zenoh-bridge detector detection-logger
+  detection-logger:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.torch.gpu
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./detector:/app
+      - ./data/detections:/data/detections
+    working_dir: /app
+    command: >
+      python zenoh_logger.py
+      --key tb/detections
+      --connect tcp/localhost:7447
+      --output /data/detections/detections.jsonl
+
+  # Run detection logging tests inside the container (has eclipse-zenoh + pytest).
+  # Usage: docker compose run --rm test-detection-logging
+  test-detection-logging:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.torch.gpu
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./detector:/app
+      - ./zenoh:/zenoh:ro
+    working_dir: /app
+    command: pytest test_detection_logging.py -v
+
+  # SLAM pose logger — subscribes to tb/slam/pose and tb/slam/status.
+  # Run alongside demo-slam for trajectory dataset generation:
+  #   docker compose up zenoh-router demo-slam slam-logger
+  slam-logger:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.torch.gpu
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./detector:/app
+      - ./data/slam:/data/slam
+    working_dir: /app
+    command: >
+      python zenoh_logger.py
+      --key tb/slam/**
+      --connect tcp/localhost:7447
+      --output /data/slam/slam.jsonl
 
   # Zenoh DDS bridge (exposes ROS 2 DDS topics as Zenoh keys with rt/ prefix)
   zenoh-bridge:
@@ -153,7 +282,7 @@ services:
     volumes:
       - ./detector:/app
     working_dir: /app
-    command: python object_detector.py --confidence 0.5 --model yolov8n.pt
+    command: python object_detector.py --confidence 0.5 --model yolov8n.pt --image-key camera/color/image_raw --connect tcp/localhost:7447
 
   # stella_vslam Visual SLAM (standalone, Zenoh transport)
   demo-slam:
@@ -169,116 +298,9 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     command: >
-      --image-key intel_realsense_r200_depth/image_raw
-      --depth-key intel_realsense_r200_depth/depth/image_raw
+      --mode rgbd
+      --image-key camera/color/image_raw
+      --depth-key camera/depth/image_rect_raw
       --config /slam/config/turtlebot_realsense.yaml
       --vocab /slam/vocab/orb_vocab.fbow
-
-# # Docker Compose file for TurtleBot3 Behavior Examples
-# #
-# # Usage:
-# #
-# # To build the images:
-# #   docker compose build
-# #
-# # To start up a specific service by name:
-# #   docker compose up <service_name>
-# #
-# # To open an interactive shell to a running container:
-# #   docker exec -it <container_name> bash
-
-# services:
-#   # Base image containing dependencies.
-#   base:
-#     image: turtlebot3_behavior:base
-#     build:
-#       context: .
-#       dockerfile: docker/Dockerfile
-#       args:
-#         ROS_DISTRO: jazzy
-#       target: base
-#     # Interactive shell
-#     stdin_open: true
-#     tty: true
-#     # Networking and IPC for ROS 2
-#     network_mode: host
-#     ipc: host
-#     # Needed to display graphical applications
-#     privileged: true
-#     environment:
-#       # Needed to define a TurtleBot3 model type
-#       - TURTLEBOT3_MODEL=${TURTLEBOT3_MODEL:-waffle_pi}
-#       # Allows graphical programs in the container.
-#       - DISPLAY=${DISPLAY}
-#       - QT_X11_NO_MITSHM=1
-#       - NVIDIA_DRIVER_CAPABILITIES=all
-#       # Fix graphics driver warnings
-#       - LIBGL_ALWAYS_INDIRECT=1
-#       - MESA_GL_VERSION_OVERRIDE=3.3
-#       - GALLIUM_DRIVER=llvmpipe
-#     volumes:
-#       # Allows graphical programs in the container.
-#       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-#       - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority
-#       # GPU device access for better graphics performance
-#       - /dev/dri:/dev/dri
-
-#   # Overlay image containing the example source code.
-#   overlay:
-#     extends: base
-#     image: turtlebot3_behavior:overlay
-#     build:
-#       context: .
-#       dockerfile: docker/Dockerfile
-#       target: overlay
-
-#   # Developer container
-#   dev:
-#     extends: overlay
-#     image: turtlebot3_behavior:dev
-#     build:
-#       context: .
-#       dockerfile: docker/Dockerfile
-#       target: dev
-#       args:
-#         - UID=${UID:-1000}
-#         - GID=${UID:-1000}
-#         - USERNAME=${USERNAME:-devuser}
-#     volumes:
-#       # Mount the source code
-#       - ./tb3_autonomy:/overlay_ws/src/tb3_autonomy:rw
-#       - ./tb3_worlds:/overlay_ws/src/tb3_worlds:rw
-#       # Mount colcon build artifacts for faster rebuilds
-#       - ./.colcon/build/:/overlay_ws/build/:rw
-#       - ./.colcon/install/:/overlay_ws/install/:rw
-#       - ./.colcon/log/:/overlay_ws/log/:rw
-#     user: ${USERNAME:-devuser}
-#     command: sleep infinity
-
-#   # Runs basic TurtleBot3 simulation
-#   sim:
-#     extends: overlay
-#     command: ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
-
-#   # Demo world
-#   demo-world:
-#     extends: overlay
-#     command: ros2 launch tb3_worlds tb3_demo_world.launch.py
-
-#   # Behavior demo using Python and py_trees
-#   demo-behavior-py:
-#     extends: overlay
-#     command: >
-#       ros2 launch tb3_autonomy tb3_demo_behavior_py.launch.py
-#       tree_type:=${BT_TYPE:?}
-#       enable_vision:=${ENABLE_VISION:?}
-#       target_color:=${TARGET_COLOR:?}
-
-#   # Behavior demo using C++ and BehaviorTree.CPP
-#   demo-behavior-cpp:
-#     extends: overlay
-#     command: >
-#       ros2 launch tb3_autonomy tb3_demo_behavior_cpp.launch.py
-#       tree_type:=${BT_TYPE:?}
-#       enable_vision:=${ENABLE_VISION:?}
-#       target_color:=${TARGET_COLOR:?}
+      --connect tcp/localhost:7447

@@ -16,7 +16,7 @@
 
 	// The optional 'workspaceFolder' property is the path VS Code should open by default when
 	// connected. This is typically a file mount in .devcontainer/docker-compose.yml
-	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+	"workspaceFolder": "/workspaces/turtlebot-maze",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// Note: git-lfs and python features removed — already provided by Dockerfile.gpu.
@@ -31,8 +31,10 @@
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
-	// Uncomment the next line if you want start specific services in your Docker Compose config.
-	// "runServices": [],
+	// Only start the dev shell; simulation services (demo-world, demo-world-enhanced, etc.)
+	// must be launched explicitly via `docker compose up <service>` to avoid duplicate
+	// Gazebo and RViz2 instances when opening the project in VSCode.
+	"runServices": ["dev"],
 
 	// Uncomment the next line if you want to keep your containers running after VS Code shuts down.
 	// "shutdownAction": "none",
