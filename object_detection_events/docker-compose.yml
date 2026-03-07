@@ -7,7 +7,7 @@ services:
     command: >
       python3 object_detection_events.py
   postgres:
-    image: postgres:latest
+    image: postgres:16
     container_name: postgres
     restart: unless-stopped
     environment:
@@ -21,3 +21,4 @@ services:
 
 volumes:
   postgres-data:
+    name: object_detection_events_postgres-data 
