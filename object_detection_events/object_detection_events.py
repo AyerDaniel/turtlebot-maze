@@ -343,16 +343,16 @@ class DetectionPipeline:
 
                 # Only write in rows of new data.  Omit already recorded detections.
                 insert_detection_query = """                                                                                                                                                                
-                    INSERT INTO detections (                                                                                                                                                                
-                        event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2                                                                                                                  
-                    )           
-                    SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM detections
-                        WHERE class_name = %s
-                            AND confidence = %s
-                            AND x1 = %s AND y1 = %s AND x2 = %s AND y2 = %s
-                    );
+                    INSERT INTO detections (event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (x1, y1, x2, y2)
+                        DO UPDATE SET
+                            event_id   = EXCLUDED.event_id,
+                            det_id     = EXCLUDED.det_id,
+                            class_id   = EXCLUDED.class_id,
+                            class_name = EXCLUDED.class_name,
+                            confidence = EXCLUDED.confidence
+                        WHERE EXCLUDED.confidence > detections.confidence;
                 """
 
                  # Insert detection data into the detections table

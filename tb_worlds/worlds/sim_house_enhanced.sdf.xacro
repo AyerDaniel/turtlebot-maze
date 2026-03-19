@@ -1820,5 +1820,10 @@
       <name>bench_4_hairdryer</name>
       <pose>0.54 2.16 0.19 0 0 0</pose>
     </include>
+    <include>
+      <uri>model://person_walking</uri>
+      <name>bench_4_person</name>
+      <pose>0.5 2.46 -.29 0 0 0</pose>
+    </include>
   </world>
 </sdf>
