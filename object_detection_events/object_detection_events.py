@@ -216,6 +216,7 @@ class DetectionPipeline:
             return
 
         # Store a unique detection id.
+        self.data["event_id"] = str(uuid.uuid4())
         self.data['detections']['det_id'] = str(uuid.uuid4())  # unique det ID
 
         # Store the class id from item.
@@ -256,6 +257,9 @@ class DetectionPipeline:
 
         data = json.loads(sample.payload.to_bytes())
 
+        # Testing
+        print(f"Data: {data}")
+
         # Insert the data into PostgreSQL
         try:
             with psycopg.connect(
@@ -286,7 +290,7 @@ class DetectionPipeline:
                 width = data["image"]["width"]
                 height = data["image"]["height"]
                 encoding = data["image"]["encoding"]
-                stamp = data["image"]["stamp"]
+                #stamp = data["image"]["stamp"]
 
                 # Convert stamp to datetime with timezone awareness
                 stamp = datetime.fromtimestamp(
@@ -297,27 +301,31 @@ class DetectionPipeline:
                 odometry = data["odometry"]
 
                 # Round off floats.
-                x = round(odometry["x"])
-                y = round(odometry["y"])
-                yaw = round(odometry["yaw"])
-                vx = round(odometry["vx"])
-                vy = round(odometry["vy"])
-                wz = round(odometry["wz"])
+                x = round(odometry["x"], 4)
+                y = round(odometry["y"], 4)
+                yaw = round(odometry["yaw"], 4)
+                vx = round(odometry["vx"], 4)
+                vy = round(odometry["vy"], 4)
+                wz = round(odometry["wz"], 4)
 
                 # Transform data
                 tf_ok = data["tf"]["tf_ok"]
                 t_base_camera = data["tf"]["t_base_camera"]
 
+
                 # Prepare raw_event as JSONB
                 raw_event = json.dumps(data)  # Convert the entire input JSON to a string
                
                 # Execute the query to insert the event data
-                cursor.execute(insert_event_query, (
-                    event_id, run_id, robot_id, sequence, stamp,
-                    image_frame_id, image_sha256, width, height, encoding,
-                    x, y, yaw, vx, vy, wz,
-                    tf_ok, t_base_camera, raw_event
-                ))
+                try:
+                    cursor.execute(insert_event_query, (
+                        event_id, run_id, robot_id, sequence, stamp,
+                        image_frame_id, image_sha256, width, height, encoding,
+                        x, y, yaw, vx, vy, wz,
+                        tf_ok, t_base_camera, raw_event
+                    ))
+                except Exception as e:
+                    print(f"Failed to write to detection_events.  Error: {e}")
                 
                 # Get detections.
                 detection = data["detections"]
@@ -357,8 +365,7 @@ class DetectionPipeline:
 
                  # Insert detection data into the detections table
                 cursor.execute(insert_detection_query, (
-                    event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2,  # INSERT values
-                    class_name, confidence, x1, y1, x2, y2                                # WHERE NOT EXISTS values
+                    event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
                 ))
 
                 

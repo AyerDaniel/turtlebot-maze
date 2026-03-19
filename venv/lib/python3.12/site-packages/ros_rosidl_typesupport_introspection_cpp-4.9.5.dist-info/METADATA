@@ -1,0 +1,34 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-typesupport-introspection-cpp
+Version: 4.9.5
+Summary: A ROS package enabling dynamic access and manipulation of ROS messages and services through C++ typesupport introspection.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rosidl-pycommon~=4.9.5
+Requires-Dist: ros-rosidl-runtime-c~=4.9.5
+Requires-Dist: ros-rosidl-generator-c~=4.9.5
+Requires-Dist: ros-rosidl-typesupport-introspection-c~=4.9.5
+Requires-Dist: ros-rosidl-parser~=4.9.5
+Requires-Dist: ros-ament-index-python~=1.11.0
+Requires-Dist: ros-rosidl-cmake~=4.9.5
+Requires-Dist: ros-rosidl-generator-cpp~=4.9.5
+Requires-Dist: ros-rosidl-runtime-cpp~=4.9.5
+Requires-Dist: ros-rosidl-typesupport-interface~=4.9.5
+Requires-Dist: ros-rosidl-cli~=4.9.5
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rosidl_typesupport_introspection_cpp
+
+`rosidl_typesupport_introspection_cpp` provides functionality for getting the associated message or service C++ typesupport handler functions and dynamically accessing or manipulating messages.
+
+## Features
+
+The features provided by `rosidl_typesupport_introspection_cpp` are described in [FEATURES](docs/FEATURES.md).
+
+## Quality Declaration
+
+See the [Quality Declaration](./QUALITY_DECLARATION.md) for more details.

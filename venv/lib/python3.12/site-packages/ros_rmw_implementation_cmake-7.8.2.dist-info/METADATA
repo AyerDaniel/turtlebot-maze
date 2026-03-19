@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: ros-rmw-implementation-cmake
+Version: 7.8.2
+Summary: ROS package providing CMake functions to discover and enumerate available ROS middleware (RMW) implementations.
+Description-Content-Type: text/markdown
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rmw_implementation_cmake
+
+This package provides some CMake functions to discover and enumerate available rmw implementations.
+
+## Features
+This package provides the following CMake functions:
+
+* [call_for_each_rmw_implementation](cmake/call_for_each_rmw_implementation.cmake): Call a CMake macro for each available RMW implementation.
+* [get_available_rmw_implementations](cmake/get_available_rmw_implementations.cmake): Get the package names of the available ROS middleware implementations.
+* [get_default_rmw_implementation](cmake/get_default_rmw_implementation.cmake): Get the package name of the default ROS middleware implementation.

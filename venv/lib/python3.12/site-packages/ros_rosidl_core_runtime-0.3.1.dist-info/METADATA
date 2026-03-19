@@ -1,0 +1,34 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-core-runtime
+Version: 0.3.1
+Summary: This ROS package, rosidl_core_runtime, manages runtime dependencies for ROS message definitions, simplifying interface package development.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rosidl-typesupport-fastrtps-cpp~=3.8.1
+Requires-Dist: ros-rosidl-typesupport-introspection-cpp~=4.9.5
+Requires-Dist: ros-rosidl-runtime-c~=4.9.5
+Requires-Dist: ros-rosidl-typesupport-cpp~=3.3.3
+Requires-Dist: ros-rosidl-typesupport-introspection-c~=4.9.5
+Requires-Dist: ros-rosidl-generator-py~=0.24.2
+Requires-Dist: ros-rosidl-runtime-cpp~=4.9.5
+Requires-Dist: ros-rosidl-typesupport-fastrtps-c~=3.8.1
+Requires-Dist: ros-rosidl-typesupport-c~=3.3.3
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rosidl_core_runtime
+
+Provides CMake functionality for finding and adding runtime dependencies for packages providing ROS message definitions.
+
+## Features
+
+The *features* of this package consist entirely of serving as a gathering place for all runtime related dependencies of ROS interface packages.
+These dependencies can be found in the [package.xml](package.xml).
+This helps reduce the boilerplate needed when developers create their own ROS interface packages.
+
+## Quality Declaration
+
+This package claims to be in the **Quality Level 1** category, see the [Quality Declaration](QUALITY_DECLARATION.md) for more details.

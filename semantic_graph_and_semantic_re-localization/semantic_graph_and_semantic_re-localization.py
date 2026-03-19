@@ -175,5 +175,45 @@ class semantic_pipeline:
 
 
 if __name__ == "__main__":
-    pipeline = semantic_pipeline(table, show_camera=False)
-    pipeline.run()
+    #pipeline = semantic_pipeline(table, show_camera=False)
+    #pipeline.run()  <--- Uncomment to run the pipeline.
+    print()
+
+##  Processing Steps For Assignment 3 ##
+'''
+    This section contains scripts I ran to fullfill the requirements of Assignment 3.
+    They are here to consolodate code for evaluation purposes.  
+    Normally I would split them into their own scripts.
+
+'''
+
+## Create embeddings of detections.
+
+# Read embeddings.
+try:
+    with psycopg.connect(
+        f"dbname={dbname} user={user} password={password} host={host} port={port}"
+    ) as conn:
+        
+        # Create a cursor.
+        cursor = conn.cursor()
+
+        # Prepare query sql.
+        query_sql = """
+            SELECT * FROM detections
+        """
+        
+        # Execute the query to insert the event data
+        detections = cursor.execute(query_sql)
+
+        # Get all detections.
+        detections = cursor.fetchall()
+        
+        print(detections)
+
+        exit()
+
+except Exception as e:
+    print(f"Error inserting data: {e}")
+
+

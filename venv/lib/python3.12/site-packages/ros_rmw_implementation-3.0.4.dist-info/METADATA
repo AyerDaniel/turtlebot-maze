@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: ros-rmw-implementation
+Version: 3.0.4
+Summary: A ROS 2 package that proxies the Middleware Interface, dynamically selecting and forwarding calls to the chosen RMW implementation.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rmw-implementation-cmake~=7.8.2
+Requires-Dist: ros-rcutils~=6.9.8
+Requires-Dist: ros-rcpputils~=2.13.5
+Requires-Dist: ros-ament-index-cpp~=1.11.0
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rmw_implementation
+
+Proxy implementation of the ROS 2 Middleware Interface, forwarding calls to the chosen (and dynamically loaded) `rmw` implementation.
+`RMW_IMPLEMENTATION` environment variable, if set, allows the user to select one of the available `rmw` implementations.
+Otherwise, the default `rmw` implementation will be used.
+Refer to `rmw_implementation_cmake` package to learn about this default.
+
+
+## Quality Declaration
+
+This package claims to be in the **Quality Level 1** category, see the [Quality Declaration](./QUALITY_DECLARATION.md) for more details.

@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: ros-rcl-logging-interface
+Version: 3.2.3
+Summary: Wheel for the rcl_logging_interface (ros-rcl-logging-interface) ROS 2 package.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rcutils~=6.9.8
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Wheel for the rcl_logging_interface (ros-rcl-logging-interface) ROS 2 package. Built using https://github.com/ycheng517/ros-python-wheels

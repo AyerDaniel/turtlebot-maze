@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-typesupport-interface
+Version: 4.9.5
+Summary: A ROS package providing C/C++ macros to define the rosidl typesupport interface for generated messages.
+Description-Content-Type: text/markdown
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rosidl_typesupport_interface
+
+`rosidl_typesupport_interface` is a package that provides macros that define the rosidl typesupport interface.
+
+## Features
+
+`rosidl_typesupport_interface` provides an interface of C/C++ macros for rosidl typesupport packages.
+They are available in the `macros.h` header.
+
+## Quality Declaration
+
+See the [Quality Declaration](QUALITY_DECLARATION.md) for more details.

@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-generator-py
+Version: 0.24.2
+Summary: Wheel for the rosidl_generator_py (ros-rosidl-generator-py) ROS 2 package.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-ament-cmake-flake8~=0.19.2
+Requires-Dist: ros-ament-cmake-cppcheck~=0.19.2
+Requires-Dist: ros-ament-cmake-cpplint~=0.19.2
+Requires-Dist: numpy
+Requires-Dist: ros-rosidl-runtime-c~=4.9.5
+Requires-Dist: ros-rosidl-generator-c~=4.9.5
+Requires-Dist: ros-rosidl-parser~=4.9.5
+Requires-Dist: ros-ament-index-python~=1.11.0
+Requires-Dist: ros-rmw~=7.8.2
+Requires-Dist: ros-ament-cmake-pep257~=0.19.2
+Requires-Dist: ros-rpyutils~=0.6.3
+Requires-Dist: ros-ament-cmake-uncrustify~=0.19.2
+Requires-Dist: ros-rosidl-cli~=4.9.5
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Wheel for the rosidl_generator_py (ros-rosidl-generator-py) ROS 2 package. Built using https://github.com/ycheng517/ros-python-wheels

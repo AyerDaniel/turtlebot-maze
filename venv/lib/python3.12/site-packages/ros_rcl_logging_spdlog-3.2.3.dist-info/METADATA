@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: ros-rcl-logging-spdlog
+Version: 3.2.3
+Summary: rcl_logging_spdlog is a ROS package providing logging functionality implemented with the high-performance spdlog library.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rcl-logging-interface~=3.2.3
+Requires-Dist: ros-spdlog-vendor~=1.7.0
+Requires-Dist: ros-rcutils~=6.9.8
+Requires-Dist: ros-rcpputils~=2.13.5
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rcl_logging_spdlog
+
+Package supporting an implementation of logging functionality using `spdlog`.
+
+[rcl_logging_spdlog](src/rcl_logging_spdlog.cpp) logging interface implementation can:
+ - initialize
+ - log a message
+ - set the logger level
+ - shutdown
+
+## Quality Declaration
+
+This package claims to be in the **Quality Level 1** category, see the [Quality Declaration](./QUALITY_DECLARATION.md) for more details.

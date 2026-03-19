@@ -1,0 +1,31 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-typesupport-fastrtps-cpp
+Version: 3.8.1
+Summary: A ROS package providing C++ interface generation for rosidl types using eProsima FastRTPS.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rosidl-pycommon~=4.9.5
+Requires-Dist: ros-rosidl-runtime-c~=4.9.5
+Requires-Dist: ros-ament-index-python~=1.11.0
+Requires-Dist: ros-rmw~=7.8.2
+Requires-Dist: ros-fastcdr~=2.3.3
+Requires-Dist: ros-rosidl-runtime-cpp~=4.9.5
+Requires-Dist: ros-rosidl-typesupport-interface~=4.9.5
+Requires-Dist: ros-rosidl-cli~=4.9.5
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rosidl_typesupport_fastrtps_cpp
+
+`rosidl_typesupport_fastrtps_cpp` is a package that provides functionality for generating rosidl C++ interfaces for eProsima FastRTPS.
+
+## Features
+
+`rosidl_typesupport_fastrtps_cpp` features are described in [FEATURES](docs/FEATURES.md).
+
+## Quality Declaration
+
+This package claims to be in the **Quality Level 2** category, see the [Quality Declaration](QUALITY_DECLARATION.md) for more details.

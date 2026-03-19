@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-runtime-c
+Version: 4.9.5
+Summary: A ROS package, `rosidl_runtime_c` provides runtime ROSIDL functionality in C.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rcutils~=6.9.8
+Requires-Dist: ros-rosidl-typesupport-interface~=4.9.5
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rosidl_generator_c
+
+`rosidl_runtime_c` is a package and provides runtime ROSIDL functionality in C.
+
+## Features
+
+A list of features provided by `rosidl_runtime_c` is available in its [feature documentation](docs/FEATURES.md).
+
+## Quality Declaration
+
+See the [Quality Declaration](QUALITY_DECLARATION.md) for more details.

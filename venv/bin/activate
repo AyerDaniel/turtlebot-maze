@@ -7,6 +7,11 @@ deactivate () {
         PATH="${_OLD_VIRTUAL_PATH:-}"
         export PATH
         unset _OLD_VIRTUAL_PATH
+
+        # Unset ROS2 vars.
+        unset AMENT_PREFIX_PATH                                                                         
+        unset ROS_DISTRO
+
     fi
     if [ -n "${_OLD_VIRTUAL_PYTHONHOME:-}" ] ; then
         PYTHONHOME="${_OLD_VIRTUAL_PYTHONHOME:-}"
@@ -64,6 +69,9 @@ if [ -z "${VIRTUAL_ENV_DISABLE_PROMPT:-}" ] ; then
     VIRTUAL_ENV_PROMPT='(venv) '
     export VIRTUAL_ENV_PROMPT
 fi
+
+# Source ROS2
+source /home/johnsmith/ros2-jazzy-20260128-linux-noble-amd64/ros2-linux/setup.bash
 
 # Call hash to forget past commands. Without forgetting
 # past commands the $PATH changes we made may not be respected

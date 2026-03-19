@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: ros-rosgraph-msgs
+Version: 2.3.0
+Summary: This ROS package provides low-level message definitions for the ROS Computation Graph, like the Clock message for ROS time.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-builtin-interfaces~=2.3.0
+Requires-Dist: ros-rosidl-default-runtime~=1.7.1
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rosgraph_msgs
+This is a package containing message definitions relating to the ROS Computation Graph. These are generally considered to be low-level messages that end users do not interact with.
+
+For more information about ROS 2 clock, see [design.ros2.org](https://design.ros2.org/articles/clock_and_time.html).
+
+For more information about ROS 2 interfaces, see [docs.ros.org](https://docs.ros.org/en/rolling/Concepts/About-ROS-Interfaces.html).
+
+## Messages (.msg)
+* [Clock](msg/Clock.msg): Communicates the current ROS time.
+
+## Quality Declaration
+This package claims to be in the **Quality Level 1** category, see the [Quality Declaration](QUALITY_DECLARATION.md) for more details.

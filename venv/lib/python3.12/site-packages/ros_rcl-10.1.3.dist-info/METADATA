@@ -1,0 +1,31 @@
+Metadata-Version: 2.4
+Name: ros-rcl
+Version: 10.1.3
+Summary: ROS package: Library to support the implementation of language-specific ROS Client Libraries.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rcl-logging-interface~=3.2.3
+Requires-Dist: ros-libyaml-vendor~=1.7.1
+Requires-Dist: ros-rcl-logging-spdlog~=3.2.3
+Requires-Dist: ros-rcl-interfaces~=2.3.0
+Requires-Dist: ros-rosidl-runtime-c~=4.9.5
+Requires-Dist: ros-tracetools~=8.6.0
+Requires-Dist: ros-rmw-implementation~=3.0.4
+Requires-Dist: ros-rcutils~=6.9.8
+Requires-Dist: ros-rmw~=7.8.2
+Requires-Dist: ros-rcl-yaml-param-parser~=10.1.3
+Requires-Dist: ros-service-msgs~=2.3.0
+Requires-Dist: ros-type-description-interfaces~=2.3.0
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+## rcl
+
+Library to support implementation of language specific ROS Client Libraries.
+
+Features are described in detail at [http://docs.ros2.org](http://docs.ros2.org/latest/api/rcl/index.html)
+
+This package claims to be in the **Quality Level 1** category, see the [Quality Declaration](./QUALITY_DECLARATION.md) for more details.

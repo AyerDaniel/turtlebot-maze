@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: ros-spdlog-vendor
+Version: 1.7.0
+Summary: This ROS package offers a CMake shim to integrate the high-performance spdlog logging library.
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: license-file
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# spdlog_vendor
+CMake shim over the spdlog library: https://github.com/gabime/spdlog.git
+
+## Quality Declaration files
+
+Quality declaration for this package: [spdlog_vendor QD](QUALITY_DECLARATION.md).
+
+Quality declaration for spdlog: [spdlog QD](SPDLOG_QUALITY_DECLARATION.md).

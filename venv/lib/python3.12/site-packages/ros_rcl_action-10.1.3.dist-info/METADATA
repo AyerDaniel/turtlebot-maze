@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: ros-rcl-action
+Version: 10.1.3
+Summary: The ROS 2 `rcl_action` package provides Python functionality for managing and interacting with ROS 2 actions.
+Description-Content-Type: text/markdown
+Requires-Dist: ros-rosidl-runtime-c~=4.9.5
+Requires-Dist: ros-rcl~=10.1.3
+Requires-Dist: ros-rcutils~=6.9.8
+Requires-Dist: ros-rmw~=7.8.2
+Requires-Dist: ros-action-msgs~=2.3.0
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Built using https://github.com/ycheng517/ros-python-wheels.
+
+# rcl_action
+
+`rcl_action` provides functionality for ROS 2 actions in C.
+
+Features are described in detail at [http://docs.ros2.org](http://docs.ros2.org/latest/api/rcl_action/index.html)
+
+For more information about ROS 2 actions, see:
+http://design.ros2.org/articles/actions.html
+
+## Quality Declaration
+
+This package claims to be in the **Quality Level 1** category, see the [Quality Declaration](./QUALITY_DECLARATION.md) for more details.

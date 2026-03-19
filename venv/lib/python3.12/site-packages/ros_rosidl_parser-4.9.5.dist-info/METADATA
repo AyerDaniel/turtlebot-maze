@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-parser
+Version: 4.9.5
+Summary: Wheel for the rosidl_parser (ros-rosidl-parser) ROS 2 package.
+Description-Content-Type: text/markdown
+Requires-Dist: lark-parser
+Requires-Dist: ros-rosidl-adapter~=4.9.5
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: summary
+
+Wheel for the rosidl_parser (ros-rosidl-parser) ROS 2 package. Built using https://github.com/ycheng517/ros-python-wheels

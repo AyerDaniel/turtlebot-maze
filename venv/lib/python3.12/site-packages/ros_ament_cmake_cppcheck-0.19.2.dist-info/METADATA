@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: ros-ament-cmake-cppcheck
+Version: 0.19.2
+Summary: Wheel for the ament_cmake_cppcheck (ros-ament-cmake-cppcheck) ROS 2 package.
+Description-Content-Type: text/markdown
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: summary
+
+Wheel for the ament_cmake_cppcheck (ros-ament-cmake-cppcheck) ROS 2 package. Built using https://github.com/ycheng517/ros-python-wheels

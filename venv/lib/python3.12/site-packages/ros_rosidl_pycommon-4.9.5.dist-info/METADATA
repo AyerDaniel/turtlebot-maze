@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: ros-rosidl-pycommon
+Version: 4.9.5
+Summary: Common Python functions used by rosidl packages.
+Author: Jacob Perron
+Author-email: jacob@openrobotics.org
+Maintainer: Aditya Pande, Brandon Ong, Dharini Dutia, Shane Loretz
+Maintainer-email: aditya.pande@openrobotics.org, brandon@openrobotics.org, dharini@openrobotics.org, sloretz@openrobotics.org
+License: Apache License, Version 2.0
+Requires-Dist: setuptools
+Dynamic: author
+Dynamic: author-email
+Dynamic: license
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: requires-dist
+Dynamic: summary
