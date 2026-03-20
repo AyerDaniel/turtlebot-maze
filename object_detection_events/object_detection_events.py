@@ -14,6 +14,7 @@ from queue import Queue
 import uuid
 import math
 import rclpy
+import hashlib
 
 from datetime import datetime, timezone
 
@@ -161,11 +162,14 @@ class DetectionPipeline:
             self.data["image"]["width"] = msg.width
             self.data["image"]["height"] = msg.height
             self.data["image"]["encoding"] = msg.encoding
-            self.data["image"]["sha256"] = "hex"  # Placeholder for SHA256
+            self.data["image"]["sha256"] = hashlib.sha256(msg.data.tobytes()).hexdigest()
 
             # Optional: convert image to numpy and display
             img_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
             img_data = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
+
+            # Save image to self.
+            self.current_image = img_data
 
             # Put the image in the queue (discards oldest if full)
             if self.image_queue.full():
@@ -257,9 +261,6 @@ class DetectionPipeline:
 
         data = json.loads(sample.payload.to_bytes())
 
-        # Testing
-        print(f"Data: {data}")
-
         # Insert the data into PostgreSQL
         try:
             with psycopg.connect(
@@ -270,11 +271,11 @@ class DetectionPipeline:
                 # Prepare the INSERT query for the detection_events table
                 insert_event_query = """
                     INSERT INTO detection_events (
-                        event_id, run_id, robot_id, sequence, stamp,
+                        event_id, run_id, robot_id, sequence, time_in_run,
                         image_frame_id, image_sha256, width, height, encoding,
                         x, y, yaw, vx, vy, wz,
-                        tf_ok, t_base_camera, raw_event
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        tf_ok, t_base_camera, raw_event, image_raw
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (event_id) DO NOTHING;
                 """
 
@@ -290,13 +291,14 @@ class DetectionPipeline:
                 width = data["image"]["width"]
                 height = data["image"]["height"]
                 encoding = data["image"]["encoding"]
-                #stamp = data["image"]["stamp"]
+                #time_in_run = data["image"]["stamp"]
 
                 # Convert stamp to datetime with timezone awareness
-                stamp = datetime.fromtimestamp(
+                time_in_run = datetime.fromtimestamp(
                     data["image"]["stamp"]["sec"] + data["image"]["stamp"]["nanosec"] * 1e-9,
                     timezone.utc
                 )
+
                 # Odometry data
                 odometry = data["odometry"]
 
@@ -316,13 +318,17 @@ class DetectionPipeline:
                 # Prepare raw_event as JSONB
                 raw_event = json.dumps(data)  # Convert the entire input JSON to a string
                
+               # Prepare image.
+                success, encoded = cv2.imencode('.jpg', self.current_image)                                                                                                                                 
+                img_bytes = encoded.tobytes() if success else None 
+
                 # Execute the query to insert the event data
                 try:
                     cursor.execute(insert_event_query, (
-                        event_id, run_id, robot_id, sequence, stamp,
+                        event_id, run_id, robot_id, sequence, time_in_run,
                         image_frame_id, image_sha256, width, height, encoding,
                         x, y, yaw, vx, vy, wz,
-                        tf_ok, t_base_camera, raw_event
+                        tf_ok, t_base_camera, raw_event, img_bytes
                     ))
                 except Exception as e:
                     print(f"Failed to write to detection_events.  Error: {e}")
@@ -355,7 +361,6 @@ class DetectionPipeline:
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (x1, y1, x2, y2)
                         DO UPDATE SET
-                            event_id   = EXCLUDED.event_id,
                             det_id     = EXCLUDED.det_id,
                             class_id   = EXCLUDED.class_id,
                             class_name = EXCLUDED.class_name,
@@ -363,10 +368,26 @@ class DetectionPipeline:
                         WHERE EXCLUDED.confidence > detections.confidence;
                 """
 
-                 # Insert detection data into the detections table
-                cursor.execute(insert_detection_query, (
-                    event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
-                ))
+                # Try to write to 'detections'.  If not, then duplicate entry and don't write to 'detection_events'.
+                try:
+                
+                    # Insert detection data into the detections table
+                    cursor.execute(insert_detection_query, (
+                        event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
+                    ))
+                
+                    # If didn't write with no exception don't write to detection_events.
+                    if cursor.rowcount == 0:                                                                                                                                                                
+                        print(f"Detection skipped: existing bbox {x1,y1,x2,y2} has higher confidence.", flush=True)                                                                                         
+                        return 
+                    
+                except psycopg.errors.UniqueViolation:                                                                                                                                                      
+                    print(f"Uniqueness conflict on detections. Aborting.", flush=True)                                                                                                                      
+                    return      
+                
+                except Exception as e:                                                                                                                                                                      
+                    print(f"Failed to write to detections. Aborting. Error: {e}", flush=True)                                                                                                               
+                    return 
 
                 
                 # Commit the transaction to save the data in the database
