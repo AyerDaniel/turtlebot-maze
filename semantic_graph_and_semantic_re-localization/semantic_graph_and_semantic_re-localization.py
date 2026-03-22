@@ -13,16 +13,21 @@ import numpy as np
 from queue import Queue
 import uuid
 import math
-#import rclpy
+import rclpy
 
 from psycopg.rows import dict_row
 import clip
 from PIL import Image
 import torch
 from datetime import datetime, timezone
+from pgvector.psycopg import register_vector 
+
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import cosine_distances  
 
 # Import packages for deserializing Zenoh output from ROS2 sensor_msgs/msg/Image.
-#from rclpy.serialization import deserialize_message
+from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
@@ -218,7 +223,7 @@ def create_embeddings():
             """
             
             # Execute query.
-            detections = cursor.execute(query_sql)
+            cursor.execute(query_sql)
 
             # Get all detections.
             detections = cursor.fetchall()
@@ -305,19 +310,15 @@ def create_embeddings():
                     # Report problems.
                     print(e)
                 
+        # Close cursor.
+        cursor.close()
 
     except Exception as e:
         print(f"Error inserting data: {e}")
 
 def do_age():
 
-    '''
-
-        This function assumes the detection_embeddings table has been populated appropriately.
-
-    '''
-
-    # Load age.
+    # Connect to db.
     try:
             
         with psycopg.connect(
@@ -328,34 +329,48 @@ def do_age():
             # Create cursor.
             cursor = conn.cursor()
 
-            # Load AGE.
-            try:
+            # Prepare query sql.
+            query_sql = """
+                SELECT * FROM detections LEFT JOIN detection_events ON detections.event_id = detection_events.event_id
+            """
+
+            # List to store x and y values.
+            coords = []
+            det_pks = []
+
+            # Get detections.
+            cursor.execute(query_sql)
+            detections = cursor.fetchall()
+
+            for row in detections:
                 
-                cursor.execute("LOAD 'age'")
+                # Store det_pk.
+                det_pks.append(row['det_pk'])
 
-            except Exception as e:
+                # Store detection's coordinates.
+                coords.append((row['x'], row['y']))
+   
+            # Run DBSCAN.  Set min_samples to 1 because all objects occur at least once.
+            dbscan = DBSCAN(eps=0.06, min_samples=1, metric='cosine')
+            labels = dbscan.fit_predict(coords)   
 
-                print(f"Exception thrown: {e}")
-
-            # Set search path.
-            try:
-
-                cursor.execute(f'SET search_path = ag_catalog, "$user", public')
-            
-            except Exception as e:
-                
-                print(f"Exception thrown: {e}")
+            # Display results.
+            for det_pk, label in zip(det_pks, labels):                                                                                                                                                  
+                print(f"det_pk: {det_pk}, cluster: {label}")
+    
+        # Close cursor.
+        cursor.close()
 
     except Exception as e:
         
-        print(e)
+        print(f"psycopg connection to db threw exception: {e}")
 
 if __name__ == "__main__":
     
 
-    #detect_objects()
+    detect_objects()
     #create_embeddings()
-    do_age()
+    #do_age()
 
     
 
