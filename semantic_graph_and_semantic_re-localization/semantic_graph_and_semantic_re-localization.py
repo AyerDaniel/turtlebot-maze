@@ -69,14 +69,6 @@ class semantic_pipeline:
 
         print("Connected to Zenoh router.", flush=True)
 
-        # Subscribe to demo-SLAM.  (Container demo-slam must be running and publishing to Zenoh).
-        self.sub_slam = self.session.declare_subscriber("tb/slam/pose", self.slam_pose_callback)
-        print(f"Subscribed to: tb/slam/pose")
-
-        # Subscribe to demo-SLAM.  (Container demo-slam must be running and publishing to Zenoh).
-        self.sub_slam = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
-        print(f"Subscribed to: tb/slam/status")
-
         # Subscribe to odom.
         self.sub_robot_state = self.session.declare_subscriber("odom", self.odom_callback)
         print(f"Subscribed to: tb/odom")
@@ -189,6 +181,10 @@ def detect_objects():
         This function assumes zenoh-router, zenoh-bridge, dectector, demo-world-enhanced containers are running.
 
     '''
+
+    # Init rclpy.
+    rclpy.init() 
+
     # Instantiate pipeline to utilize Zenoh and such to record detections from ROS2 and Gazebo.
     pipeline = semantic_pipeline(table, show_camera=False)
 
@@ -309,9 +305,7 @@ def create_embeddings():
                 except Exception as e:
                     # Report problems.
                     print(e)
-                
-        # Close cursor.
-        cursor.close()
+
 
     except Exception as e:
         print(f"Error inserting data: {e}")
@@ -357,9 +351,7 @@ def do_age():
             # Display results.
             for det_pk, label in zip(det_pks, labels):                                                                                                                                                  
                 print(f"det_pk: {det_pk}, cluster: {label}")
-    
-        # Close cursor.
-        cursor.close()
+
 
     except Exception as e:
         
