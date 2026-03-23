@@ -69,6 +69,9 @@ class semantic_pipeline:
 
         print("Connected to Zenoh router.", flush=True)
 
+        # Subscrib eto detections.
+        self.sub_detections = self.session.declare_subscriber("tb\detections", self.detections_callback)
+
         # Subscribe to odom.
         self.sub_robot_state = self.session.declare_subscriber("odom", self.odom_callback)
         print(f"Subscribed to: tb/odom")
@@ -77,19 +80,13 @@ class semantic_pipeline:
         self.sub_tf = self.session.declare_subscriber("tf_static", self.tf_callback)
         print(f"Subscribed to: tf")
 
-    def slam_pose_callback(self, sample):
-        
-        # Extract the raw byte data
-        msg = sample.payload.to_bytes().decode()
+    def detections_callback(self, sample):
+        try:
+            print(sample)
+            
+        except Exception as e:
 
-        print(msg)
-
-    def slam_status_callback(self, sample):
-
-        # Extract the raw byte data
-        msg = sample.payload.to_bytes().decode()
-
-        print(msg)
+            print(f"Exception thrown in detections_callback: {e}")
 
     def tf_callback(self, sample):
 
@@ -118,7 +115,8 @@ class semantic_pipeline:
         except Exception as e:
 
             # Display error.
-            print(f"Robot is stationary.  Assignment is asking for dynamic information.  Please move the bot and try again.")
+            print(f"tf_callback error: {e}")
+
 
     def odom_callback(self, sample):
 
