@@ -14,6 +14,7 @@ from queue import Queue
 import uuid
 import math
 import rclpy
+import hashlib
 
 from psycopg.rows import dict_row
 import clip
@@ -37,7 +38,7 @@ from datetime import datetime
 
 from db_connect import *
 
-class semantic_pipeline:
+class DetectionPipeline:
     def __init__(self, table, queue_size=10, show_camera=True):
         self.table = table
         self.show_camera = show_camera
@@ -55,6 +56,7 @@ class semantic_pipeline:
             "tf": {},
             "detections": {}
         }
+
         # Zenoh connection
         conf = zenoh.Config()
         conf.insert_json5("connect/endpoints", '["tcp/localhost:7447"]')
@@ -69,15 +71,24 @@ class semantic_pipeline:
 
         print("Connected to Zenoh router.", flush=True)
 
-        # Subscrib eto detections.
-        self.sub_detections = self.session.declare_subscriber("tb\detections", self.detections_callback)
+        # Subscribe to images.
+        self.sub_images = self.session.declare_subscriber("camera/image_raw", self.img_callback)
+        print("Subscribed to: tb/camera/image_raw", flush=True)
+
+        # Subscribe to detections.
+        self.sub_detections = self.session.declare_subscriber("tb/detections", self.detections_callback)
+        print("Subscribed to tb/detections", flush=True)
+
+        # Subscribe to detections with wildcard in topic
+        self.sub_maze_detections = self.session.declare_subscriber("maze/**/detections/v1/*", self.write_detections)
+        print("Subscribed to maze/**/detections/v1/*", flush=True)
 
         # Subscribe to odom.
         self.sub_robot_state = self.session.declare_subscriber("odom", self.odom_callback)
-        print(f"Subscribed to: tb/odom")
+        print(f"Subscribed to: odom")
 
         # Subscribe to TF
-        self.sub_tf = self.session.declare_subscriber("tf_static", self.tf_callback)
+        self.sub_TF = self.session.declare_subscriber("tf_static", self.tf_callback)
         print(f"Subscribed to: tf")
 
     def detections_callback(self, sample):
@@ -115,8 +126,7 @@ class semantic_pipeline:
         except Exception as e:
 
             # Display error.
-            print(f"tf_callback error: {e}")
-
+            print(f"Robot is stationary.  Assignment is asking for dynamic information.  Please move the bot and try again.")
 
     def odom_callback(self, sample):
 
@@ -154,7 +164,258 @@ class semantic_pipeline:
         except Exception as e:
             print(f"Error in odometry callback: {e}")
 
+    # Image callback to store the image in queue
+    def img_callback(self, sample):
+        try:
+            # Deserialize the message
+            msg = deserialize_message(sample.payload.to_bytes(), Image)
+
+            # Store the image data in the structure
+            self.data["image"]["topic"] = "/camera/image_raw"
+            self.data["image"]["stamp"] = {
+                "sec": msg.header.stamp.sec,
+                "nanosec": msg.header.stamp.nanosec
+            }
+            self.data["image"]["frame_id"] = msg.header.frame_id
+            self.data["image"]["width"] = msg.width
+            self.data["image"]["height"] = msg.height
+            self.data["image"]["encoding"] = msg.encoding
+            self.data["image"]["sha256"] = hashlib.sha256(msg.data.tobytes()).hexdigest()
+
+            # Optional: convert image to numpy and display
+            img_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
+            img_data = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
+
+            # Save image to self.
+            self.current_image = img_data
+
+            # Put the image in the queue (discards oldest if full)
+            if self.image_queue.full():
+                try:
+                    self.image_queue.get_nowait()
+                except:
+                    pass
+
+            self.image_queue.put(img_data)
+
+            # Optional display if show_camera is True
+            if self.show_camera:
+                cv2.imshow("Camera", img_data)
+                cv2.waitKey(1)
+
+        except Exception as e:
+            print(f"Error in image callback: {e}")
+
+    # Detection callback pulls latest image from queue
+    def detections_callback(self, sample):
+        if self.image_queue.empty():
+
+            return
+
+        try:
+
+            detections = json.loads(sample.payload.to_bytes())
+
+        except Exception as e:
+
+            print(f"Failed to parse detection: {e}", flush=True)
+            return
+
+        if not detections:
+
+            return
+
+        # Get nested detection info.
+        detection = detections[0]
+
+        # Get the latest image from the queue
+        try:
+            img = self.image_queue.get_nowait()
+
+        except:
+
+            print("Failed to get image from queue", flush=True)
+            return
+
+        # Store a unique detection id.
+        self.data["event_id"] = str(uuid.uuid4())
+        self.data['detections']['det_id'] = str(uuid.uuid4())  # unique det ID
+
+        # Store the class id from item.
+        from coco_dict import coco_item_class_dict
+
+        self.data['detections']['class_id'] = coco_item_class_dict[detection['class']]
+
+        # Store class name.
+        self.data['detections']['class_name'] = detection['class']
+
+        # Store confidence.
+        self.data['detections']['confidence'] = detection['confidence']
+
+        # Store bbox.
+        self.data['detections']['bbox_xyxy'] = detection['bbox']  
+
+        # Report detection.
+        print(f"{self.data['detections']}", flush=True)
         
+        # Publish data to Zenoh.
+        """Serialize the data to JSON and publish it to Zenoh."""
+        try:
+
+            # Define the topic dynamically (e.g., maze/{robot_id}/detections/v1/{event_id})
+            topic = f"maze/{self.data['robot_id']}/detections/v1/{self.data['event_id']}"
+
+            # Serialize the data to JSON
+            serialized_data = json.dumps(self.data)
+
+            # Publish to Zenoh topic
+            self.session.put(topic, serialized_data.encode())
+
+        except Exception as e:
+            print(f"Failed to publish to Zenoh: {e}") 
+    
+    def write_detections(self, sample):
+    # Write json to db.
+
+        data = json.loads(sample.payload.to_bytes())
+
+        # Insert the data into PostgreSQL
+        try:
+            with psycopg.connect(
+                f"dbname={dbname} user={user} password={password} host={host} port={port}"
+            ) as conn:
+                cursor = conn.cursor()
+
+                # Prepare the INSERT query for the detection_events table
+                insert_event_query = """
+                    INSERT INTO detection_events (
+                        event_id, run_id, robot_id, sequence, time_in_run,
+                        image_frame_id, image_sha256, width, height, encoding,
+                        x, y, yaw, vx, vy, wz,
+                        tf_ok, t_base_camera, raw_event, image_raw
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (event_id) DO NOTHING;
+                """
+
+                # Extract relevant data from the input JSON
+                event_id = data["event_id"]
+                run_id = data["run_id"]
+                robot_id = data["robot_id"]
+                sequence = data["sequence"]
+
+                # Image-related data
+                image_frame_id = data["image"]["frame_id"]
+                image_sha256 = data["image"]["sha256"]
+                width = data["image"]["width"]
+                height = data["image"]["height"]
+                encoding = data["image"]["encoding"]
+                #time_in_run = data["image"]["stamp"]
+
+                # Convert stamp to datetime with timezone awareness
+                time_in_run = datetime.fromtimestamp(
+                    data["image"]["stamp"]["sec"] + data["image"]["stamp"]["nanosec"] * 1e-9,
+                    timezone.utc
+                )
+
+                # Odometry data
+                odometry = data["odometry"]
+
+                # Round off floats.
+                x = round(odometry["x"], 4)
+                y = round(odometry["y"], 4)
+                yaw = round(odometry["yaw"], 4)
+                vx = round(odometry["vx"], 4)
+                vy = round(odometry["vy"], 4)
+                wz = round(odometry["wz"], 4)
+
+                # Transform data
+                tf_ok = data["tf"]["tf_ok"]
+                t_base_camera = data["tf"]["t_base_camera"]
+
+
+                # Prepare raw_event as JSONB
+                raw_event = json.dumps(data)  # Convert the entire input JSON to a string
+               
+               # Prepare image.
+                success, encoded = cv2.imencode('.jpg', self.current_image)                                                                                                                                 
+                img_bytes = encoded.tobytes() if success else None 
+
+                # Execute the query to insert the event data
+                try:
+                    cursor.execute(insert_event_query, (
+                        event_id, run_id, robot_id, sequence, time_in_run,
+                        image_frame_id, image_sha256, width, height, encoding,
+                        x, y, yaw, vx, vy, wz,
+                        tf_ok, t_base_camera, raw_event, img_bytes
+                    ))
+                except Exception as e:
+                    print(f"Failed to write to detection_events.  Error: {e}")
+                
+                # Get detections.
+                detection = data["detections"]
+     
+                det_id = detection["det_id"]
+                class_id = detection["class_id"]
+                class_name = detection["class_name"]
+                confidence = detection["confidence"]
+                x1, y1, x2, y2 = detection["bbox_xyxy"]
+
+                # Round off floats.
+                confidence = round(confidence, 3)
+                x1 = round(x1)
+                y1 = round(y1)
+                x2 = round(x2)
+                y2 = round(y2)
+
+                
+                # # Insert detection data into the detections table
+                # cursor.execute(insert_detection_query, (
+                #     event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
+                # ))
+
+                # Only write in rows of new data.  Omit already recorded detections.
+                insert_detection_query = """                                                                                                                                                                
+                    INSERT INTO detections (event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (x1, y1, x2, y2)
+                        DO UPDATE SET
+                            det_id     = EXCLUDED.det_id,
+                            class_id   = EXCLUDED.class_id,
+                            class_name = EXCLUDED.class_name,
+                            confidence = EXCLUDED.confidence
+                        WHERE EXCLUDED.confidence > detections.confidence;
+                """
+
+                # Try to write to 'detections'.  If not, then duplicate entry and don't write to 'detection_events'.
+                try:
+                
+                    # Insert detection data into the detections table
+                    cursor.execute(insert_detection_query, (
+                        event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
+                    ))
+                
+                    # If didn't write with no exception don't write to detection_events.
+                    if cursor.rowcount == 0:                                                                                                                                                                
+                        print(f"Detection skipped: existing bbox {x1,y1,x2,y2} has higher confidence.", flush=True)                                                                                         
+                        return 
+                    
+                except psycopg.errors.UniqueViolation:                                                                                                                                                      
+                    print(f"Uniqueness conflict on detections. Aborting.", flush=True)                                                                                                                      
+                    return      
+                
+                except Exception as e:                                                                                                                                                                      
+                    print(f"Failed to write to detections. Aborting. Error: {e}", flush=True)                                                                                                               
+                    return 
+
+                
+                # Commit the transaction to save the data in the database
+                conn.commit()
+                #print("Data inserted successfully!")
+
+        except Exception as e:
+            print(f"Error inserting data: {e}")
+
+    
     def run(self):
         try:
             while True:
@@ -165,9 +426,11 @@ class semantic_pipeline:
 
         finally:
 
-            self.sub_tf.undeclare()
+            self.sub_images.undeclare()
+            self.sub_detections.undeclare()
+            self.sub_maze_detections.undeclare()
             self.sub_robot_state.undeclare()
-            self.sub_slam.undeclare()
+            self.sub_TF.undeclare()
 
             self.session.close()
             print("Monitor stopped.", flush=True)
@@ -184,7 +447,7 @@ def detect_objects():
     rclpy.init() 
 
     # Instantiate pipeline to utilize Zenoh and such to record detections from ROS2 and Gazebo.
-    pipeline = semantic_pipeline(table, show_camera=False)
+    pipeline = DetectionPipeline(table, show_camera=False)
 
     # Run pipeline.
     pipeline.run()
@@ -357,11 +620,6 @@ def do_age():
 
 if __name__ == "__main__":
     
-
+    # Run steps in assignments.
     detect_objects()
-    #create_embeddings()
-    #do_age()
-
     
-
-
