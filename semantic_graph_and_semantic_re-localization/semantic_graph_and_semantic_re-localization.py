@@ -38,7 +38,7 @@ from datetime import datetime
 
 from db_connect import *
 
-class DetectionPipeline:
+class Turtlebot:
     def __init__(self, table, queue_size=10, show_camera=True):
         self.table = table
         self.show_camera = show_camera
@@ -435,7 +435,7 @@ class DetectionPipeline:
             self.session.close()
             print("Monitor stopped.", flush=True)
 
-def detect_objects():
+def detect_objects(turtlebot):
 
     '''
         
@@ -446,11 +446,8 @@ def detect_objects():
     # Init rclpy.
     rclpy.init() 
 
-    # Instantiate pipeline to utilize Zenoh and such to record detections from ROS2 and Gazebo.
-    pipeline = DetectionPipeline(table, show_camera=False)
-
     # Run pipeline.
-    pipeline.run()
+    turtlebot.run()
 
 def create_embeddings():
 
@@ -620,8 +617,11 @@ def do_age():
 
 if __name__ == "__main__":
     
+    # Instantiate bot.
+    turtlebot = Turtlebot(table, show_camera=False)
+
     # Run steps in assignments.
-    # detect_objects()
-    create_embeddings()
+    # detect_objects(turtlebot)
+    # create_embeddings()
     # do_age()
 
