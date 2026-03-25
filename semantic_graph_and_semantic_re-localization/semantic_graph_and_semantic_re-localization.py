@@ -18,7 +18,7 @@ import hashlib
 
 from psycopg.rows import dict_row
 import clip
-from PIL import Image
+from PIL import Image as PILImage
 import torch
 from datetime import datetime, timezone
 from pgvector.psycopg import register_vector 
@@ -528,7 +528,7 @@ def create_embeddings():
                 cropped = img[int(y1):int(y2), int(x1):int(x2)] 
 
                 # Create PIL input for CLIP.
-                pil_image = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                pil_image = PILImage.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
 
                 # Preprocess for CLIP                                                                                                                                                                   
                 image_tensor = preprocess(pil_image).unsqueeze(0).to(device)                                                                                                                            
@@ -621,5 +621,7 @@ def do_age():
 if __name__ == "__main__":
     
     # Run steps in assignments.
-    detect_objects()
-    
+    # detect_objects()
+    create_embeddings()
+    # do_age()
+
