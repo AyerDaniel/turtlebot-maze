@@ -65,7 +65,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsuitesparseconfig7 libcholmod5 libccolamd3 libcamd3 libamd3 libcxsparse4 \
     libgoogle-glog0v6t64 libatlas3-base \
     libyaml-cpp0.8 libsqlite3-0 libspdlog1.12 \
-    python3 python3-pip python3-numpy \
+    # python3 python3-pip python3-numpy \
+    python3 python3-pip python3-numpy build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Python Zenoh + CDR deserialization

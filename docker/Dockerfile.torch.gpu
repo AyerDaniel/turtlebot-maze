@@ -17,7 +17,8 @@ RUN groupadd --gid $USER_GID $USERNAME \
 # System packages
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
   apt-get -y install --no-install-recommends \
-  curl git ffmpeg libgl1 libglib2.0-0 make bash-completion \
+  # curl git ffmpeg libgl1 libglib2.0-0 make bash-completion \
+  curl git ffmpeg libgl1 libglib2.0-0 make bash-completion build-essential \
   && rm -rf /var/lib/apt/lists/*
 
 # uv package manager (eng-ai-agents pattern)

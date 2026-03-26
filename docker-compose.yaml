@@ -304,3 +304,4 @@ services:
       --config /slam/config/turtlebot_realsense.yaml
       --vocab /slam/vocab/orb_vocab.fbow
       --connect tcp/localhost:7447
+

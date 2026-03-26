@@ -91,6 +91,23 @@ class Turtlebot:
         self.sub_TF = self.session.declare_subscriber("tf_static", self.tf_callback)
         print(f"Subscribed to: tf")
 
+        # Subscribe to SLAM.
+        self.sub_slam = self.session.declare_subscriber("tb/slam/pose", self.slam_pose_callback)
+        print(f"Subscribed to slam/pose")
+
+        self.sub_slam = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
+        print(f"Subscribed to slam/status")
+        
+    def slam_pose_callback(self, sample):
+
+        # Testing
+        print(sample)
+
+    def slam_status_callback(self, sample):
+
+        # Testing
+        print(sample)
+        
     def detections_callback(self, sample):
         try:
             print(sample)
