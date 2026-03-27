@@ -59,13 +59,21 @@ class Turtlebot:
             "detections": {},
             "pose": {},
             "slam": {},
-            "batch_batch_cropped_detections": []
+            "batch_cropped_detections": []
         }
 
         # Zenoh connection
         conf = zenoh.Config()
         conf.insert_json5("connect/endpoints", '["tcp/localhost:7447"]')
 
+        # Run YOLOv8 inference on the frame to produce bounding boxes
+        self.yolo_model = YOLO('yolov8n.pt') 
+
+        # Set device and model to create embeddings.
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.clip_model, self.preprocess = clip.load("ViT-B/32", device=self.device)
+
+        
         try:
             self.session = zenoh.open(conf)
 
@@ -103,7 +111,7 @@ class Turtlebot:
         self.sub_slam = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
         print(f"Subscribed to slam/status")
                                                                                                                                                      
-    def rotation_delta_rad(mat_prev, mat_curr):  
+    def rotation_delta_rad(self, mat_prev, mat_curr):  
 
         # Extract 3x3 matrix of rotational values from SLAM Pose Zenoh Topic.                                                                                                                                               
         R_prev = mat_prev[:3, :3]                                                                                                                                                               
@@ -149,7 +157,7 @@ class Turtlebot:
 
             # Convert Zenoh SLAM Pose topic into rotational and positional vectors.
             mat = np.array(data['pose']).reshape(3, 4) 
-            rotational = mat['pose'][:, :3]
+            rotational = mat[:3, :3]
             translational = mat[:, 3]
 
             # Set euclidean threshold.
@@ -179,19 +187,16 @@ class Turtlebot:
 
             '''
 
-            # Run YOLOv8 inference on the frame to produce bounding boxes
-            yolo_model = YOLO('yolov8n.pt') 
-
             # Create current image variable for readability.
             curr_image = self.data['image']['current_image']
 
             # Run YOLO inference on a single image.
-            results = yolo_model(curr_image)
+            results = self.yolo_model(curr_image)
 
             for result in results:
                 
                 # See if there is a detection.
-                if len(results.boxes) == 0:
+                if len(result.boxes) == 0:
                     # Nothing detected.
                     continue
                     # Should we embed this anyway for later localization?
@@ -228,23 +233,19 @@ class Turtlebot:
                         '''
 
                         # Add image to batch.
-                        self.batch_cropped_detections.append(cropped)
-
-                        # Set device and model to create embeddings.
-                        device = "cuda" if torch.cuda.is_available() else "cpu"
-                        clip_model, preprocess = clip.load("ViT-B/32", device=device)
+                        self.data['batch_cropped_detections'].append(cropped)
 
                         # Create PIL input for CLIP.
                         pil_image = PILImage.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
 
                         # Preprocess for CLIP                                                                                                                                                                   
-                        image_tensor = preprocess(pil_image).unsqueeze(0).to(device)                                                                                                                            
+                        image_tensor = self.preprocess(pil_image).unsqueeze(0).to(self.device)                                                                                                                            
                         
                         # Get embeddings.
                         with torch.no_grad():                                 
 
                             # Get embeddings.
-                            image_features = clip_model.encode_image(image_tensor) 
+                            image_features = self.clip_model.encode_image(image_tensor) 
 
                             # Apply L2 norm.
                             image_features = image_features / image_features.norm(dim=-1, keepdim=True)  
@@ -255,7 +256,7 @@ class Turtlebot:
                                 keyframe_id - monotonically increasing integer
                                 timestamp - wall clock time
                                 map_x, map_y, map_yaw - robot pose in map frame
-                                detections - array of \{class, confidence, bbox, embedding, embedding_dim, embedding_model\}
+                                detections - array of \\{class, confidence, bbox, embedding, embedding_dim, embedding_model\\}
 
                         '''
 
@@ -263,7 +264,7 @@ class Turtlebot:
                         json_envelope = {
                             
                                 "keyframe_id": str(uuid.uuid4()),  # unique event ID
-                                "timestamp": datetime.now(),
+                                "timestamp": datetime.now().isoformat(),
                                 "map_x": self.data["odometry"]["x"],
                                 "map_y": self.data["odometry"]["y"],
                                 "map_yaw": self.data["odometry"]["yaw"],
@@ -271,23 +272,34 @@ class Turtlebot:
                                     'class': classes,
                                     'confidence': confidence,
                                     'bbox': (x1, y1, x2, y2),
-                                    'embedding': image_features,
+                                    'embedding': image_features.tolist(),
                                     'embedding_dims':512,
                                     'embedding_model': 'CLIP: ViT-B/32'
 
                                 }]
                                 
                         }
-                        # Publish to tb/detections.
 
+                        # TEsting.
+                        for thing in json_envelope:
+                            #print(type(thing))
+                            print("thing")
 
+                        # Set topic.
+                        topic = "tb/detections"
+
+                        # Serialize the data to JSON
+                        serialized_data = json.dumps(json_envelope)
+
+                        # Publish topic to Zenoh.
+                        self.session.put(topic, serialized_data.encode())
 
         except (KeyError, TypeError):
             # Timestamp not set.
             try:
 
                 # Set timestamp.
-                self.data['slam']['timestamp'] = self.data['pose']['timestamp']
+                self.data['pose']['timestamp'] = self.data['slam']['timestamp']
 
             except Exception as e:
 
