@@ -47,20 +47,51 @@ class Turtlebot:
         self.image_queue = Queue(maxsize=queue_size)
 
         # Initialize the data structure
-        self.data = {
+        self.data = {                                                                                                                                                                               
             "schema": "maze.detection.v1",
-            "event_id": str(uuid.uuid4()),  # unique event ID
-            "run_id": str(uuid.uuid4()),    # unique run ID
+            "event_id": str(uuid.uuid4()),
+            "run_id": str(uuid.uuid4()),                                                                                                                                                            
             "robot_id": "tb3_sim",
-            "sequence": int(),
-            "image": {},
-            "odometry": {},
-            "tf": {},
-            "detections": {},
-            "pose": {},
-            "slam": {},
-            "batch_cropped_detections": []
+            "sequence": 0,                                                                                                                                                                          
+            "image": {  
+                "topic": None,
+                "stamp": None,                                                                                                                                                                      
+                "frame_id": None,
+                "width": None,                                                                                                                                                                      
+                "height": None,
+                "encoding": None,
+                "sha256": None,
+                "current_image": None,                                                                                                                                                              
+            },
+            "odometry": {                                                                                                                                                                           
+                "topic": None,
+                "frame_id": None,
+                "x": 0.0, "y": 0.0, "yaw": 0.0,                                                                                                                                                     
+                "vx": 0.0, "vy": 0.0, "wz": 0.0,
+            },                                                                                                                                                                                      
+            "tf": {     
+                "base_frame": None,                                                                                                                                                                 
+                "camera_frame": None,                                                                                                                                                               
+                "t_base_camera": None,
+                "tf_ok": False,                                                                                                                                                                     
+            },          
+            "detections": {                                                                                                                                                                         
+                "det_id": None,
+                "class_id": None,
+                "class_name": None,                                                                                                                                                                 
+                "confidence": None,
+                "bbox_xyxy": None,                                                                                                                                                                  
+            },          
+            "pose": {
+                "timestamp": None,
+            },                                                                                                                                                                                      
+            "slam": {
+                "timestamp": None,                                                                                                                                                                  
+            },          
+            "rotational": None,
+            "batch_cropped_detections": []                                                                                                                                                          
         }
+
 
         # Zenoh connection
         conf = zenoh.Config()
@@ -182,15 +213,24 @@ class Turtlebot:
             params = json.dumps({"run_id": run_id, "started_at": datetime.now().isoformat()})                                                                                                           
             cursor.execute("""
                     SELECT * FROM cypher('maze', $$                                                                                                                                                         
-                        MERGE (r:Run {run_id: $run_id})
-                        ON CREATE SET r.started_at = $started_at
+                        MATCH (r:Run {run_id: $run_id})
                         RETURN r                                                                                                                                                                            
                     $$, %s::agtype) AS (r agtype)
-                """, (params,)) 
+                """, (params,))
+
+            if cursor.fetchone() is None:
+                # Run node doesn't exist yet — create it with started_at.
+                params = json.dumps({"run_id": run_id, "started_at": datetime.now().isoformat()})                                                                                                   
+                cursor.execute("""                                                                                                                                                                  
+                    SELECT * FROM cypher('maze', $$                                                                                                                                                 
+                        CREATE (r:Run {run_id: $run_id, started_at: $started_at})                                                                                                                   
+                        RETURN r
+                    $$, %s::agtype) AS (r agtype)
+                """, (params,))
         
-        except Exception as e:
-        
-            print(f"Exception {e}")
+        except Exception as e:                                                                                                                                                                      
+            print(f"Exception creating Run node: {e}")
+            conn.rollback() 
 
         # Set variables for readability.
         params = json.dumps({
@@ -342,6 +382,10 @@ class Turtlebot:
         # Create current image variable for readability.
         curr_image = self.data['image']['current_image']
 
+        if curr_image is None:                                                                                                                                                                      
+            print("No image available yet, skipping frame.", flush=True)
+            return 
+
         # Run YOLO inference on a single image.
         results = self.yolo_model(curr_image)
 
@@ -358,16 +402,8 @@ class Turtlebot:
             
             else:
 
-                if isinstance(img_data, np.ndarray):
-                    
-                    # Image is decoded.  use directly.
-                    img = curr_image
-
-                else:
-
-                    # Read in image.  Expected encoding: 'rgb8, bytes: 19437' output from ROS2.
-                    nparr = np.frombuffer(curr_image, np.uint8)                                                                                                                                                  
-                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)   
+                # Set img.
+                img = curr_image
 
                 # Get box coords of detected object.
                 for box in result.boxes:
@@ -442,14 +478,19 @@ class Turtlebot:
                 "map_x": self.data["odometry"]["x"],    
                 "map_y": self.data["odometry"]["y"],
                 "map_yaw": self.data["odometry"]["yaw"],                                                                                                                                                
-                "detections": detections                
+                "detections": detections,
+                "class" : detections[0]['class'],
+                "confidence" : detections[0]['confidence'],
+                "bbox": detections[0]['bbox'],
+
+
             }  
 
             # Set topic.
             topic = "tb/detections"
 
             # Serialize the data to JSON
-            serialized_data = json.dumps(json_envelope)
+            serialized_data = json.dumps([json_envelope])
 
             # Publish topic to Zenoh.
             self.session.put(topic, serialized_data.encode())
@@ -622,8 +663,7 @@ class Turtlebot:
         if not detections:
 
             return
-
-        # Get nested detection info.
+ 
         detection = detections[0]
 
         # Get the latest image from the queue
