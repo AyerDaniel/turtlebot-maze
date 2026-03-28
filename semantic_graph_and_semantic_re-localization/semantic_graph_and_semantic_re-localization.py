@@ -98,19 +98,165 @@ class Turtlebot:
 
         # Subscribe to odom.
         self.sub_robot_state = self.session.declare_subscriber("odom", self.odom_callback)
-        print(f"Subscribed to: odom")
+        print(f"Subscribed to: odom", flush=True)
 
         # Subscribe to TF
         self.sub_TF = self.session.declare_subscriber("tf_static", self.tf_callback)
-        print(f"Subscribed to: tf")
+        print(f"Subscribed to: tf", flush=True)
 
         # Subscribe to SLAM.
         self.sub_slam = self.session.declare_subscriber("tb/slam/pose", self.slam_pose_callback)
-        print(f"Subscribed to slam/pose")
+        print(f"Subscribed to slam/pose", flush=True)
 
         self.sub_slam = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
-        print(f"Subscribed to slam/status")
-                                                                                                                                                     
+        print(f"Subscribed to slam/status", flush=True)
+
+    def write_to_graph(self, conn, json_, graph='maze'):
+        # This method writes detections to the graph for later use.
+
+        def label_exists(cursor, graph, label):                                                                                                                                                     
+            # This function checks for existing nodes and edges.
+            cursor.execute("""                                                                                                                                                                      
+                SELECT count(*) FROM ag_catalog.ag_label                                                                                                                                            
+                WHERE graph = (SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s)                                                                                                             
+                AND name = %s
+            """, (graph, label))                                                                                                                                                                    
+            return cursor.fetchone()[0] > 0
+        
+        # Get cursor.
+        cursor = conn.cursor()
+
+        # Load Apache AGE.
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS age")
+        cursor.execute("LOAD 'age'")
+        cursor.execute("SET search_path = ag_catalog, \"$user\", public")
+
+        # Create graph if needed.
+        # Query for existing graph.
+        cursor.execute("SELECT count(*) FROM ag_catalog.ag_graph WHERE name = %s", (graph,))
+
+        # Create graph if needed.                                                                                                                                                       
+        if cursor.fetchone()[0] == 0:
+
+            cursor.execute("SELECT * FROM ag_catalog.create_graph(%s)", (graph,))  
+        
+        # Create list of nodes.
+        nodes = ['Run', 'Keyframe', 'Pose', 'Place', 'Object', 'Observation']      
+
+        # Create list of edge types.
+        edges = ['HAS_KEYFRAME', 'HAS_POSE', 'HAS_OBSERVATION', 'CORRESPONDS_TO', 'LOCATED_IN', 'ADJACENT_TO']                                                                                    
+
+        # Create node labels if needed.                                                                                                                                                                                    
+        for node in nodes:                                                                                                                                                                       
+            if not label_exists(cursor, 'maze', node):                                                                                                                                             
+                try:
+
+                    cursor.execute("SELECT create_vlabel('maze', %s)", (node,))
+
+                except Exception as e:
+
+                    print(f"Exception {e}")
+
+        # Create edge labels if needed.                                                                                                                                                                         
+        for edge in edges:
+            if not label_exists(cursor, 'maze', edge):                                                                                                                                             
+                try:
+
+                    cursor.execute("SELECT create_elabel('maze', %s)", (edge,))
+                
+                except Exception as e:
+                    
+                    print(f"Exception {e}")
+
+        # Set variables for readability.                                                                                                                                                      
+        run_id = self.data['run_id']                                                                                                                                                          
+        kf_id  = json_['keyframe_id']                                                                                                                                                         
+        ts     = json_['timestamp']                                                                                                                                                           
+        x      = json_['map_x']                                                                                                                                                               
+        y      = json_['map_y']                                                                                                                                                               
+        yaw    = json_['map_yaw'] 
+
+
+        # Create run_id and timestamp.
+        try:
+            params = json.dumps({"run_id": run_id, "started_at": datetime.now().isoformat()})                                                                                                           
+            cursor.execute("""
+                    SELECT * FROM cypher('maze', $$                                                                                                                                                         
+                        MERGE (r:Run {run_id: $run_id})
+                        ON CREATE SET r.started_at = $started_at
+                        RETURN r                                                                                                                                                                            
+                    $$, %s::agtype) AS (r agtype)
+                """, (params,)) 
+        
+        except Exception as e:
+        
+            print(f"Exception {e}")
+
+        # Set variables for readability.
+        params = json.dumps({
+              "run_id": run_id,
+              "kf_id":  kf_id,
+              "ts":     ts,
+              "x":      x,
+              "y":      y,
+              "yaw":    yaw,
+          })
+
+        try:
+            cursor.execute("""
+                SELECT * FROM cypher('maze', $$
+                    MATCH (r:Run {run_id: $run_id})
+                    CREATE (kf:Keyframe {keyframe_id: $kf_id, timestamp: $ts})
+                    CREATE (p:Pose {x: $x, y: $y, yaw: $yaw})
+                    CREATE (r)-[:HAS_KEYFRAME]->(kf)
+                    CREATE (kf)-[:HAS_POSE]->(p)
+                    RETURN kf
+                $$, %s::agtype) AS (kf agtype)
+            """, (params,))
+        
+        except Exception as e:
+
+            print(f"Exception {e}")
+
+        # store detections.     
+        for det in json_.get('detections', []):
+            params = json.dumps({
+                  "kf_id":      kf_id,
+                  "class_name": det['class'],
+                  "confidence": det['confidence'],
+                  "bbox":       json.dumps(det['bbox']),   # store as JSON string
+                  "emb_model":  det['embedding_model'],
+              })
+
+            try:
+                cursor.execute("""
+                        SELECT * FROM cypher('maze', $$
+                            MATCH (kf:Keyframe {keyframe_id: $kf_id})
+                            MERGE (obj:Object {class_name: $class_name})
+                            CREATE (obs:Observation {
+                                confidence:      $confidence,
+                                bbox:            $bbox,
+                                embedding_model: $emb_model
+                            })
+                            CREATE (kf)-[:HAS_OBSERVATION]->(obs)
+                            CREATE (obs)-[:CORRESPONDS_TO]->(obj)
+                            RETURN obs
+                        $$, %s::agtype) AS (obs agtype)
+                    """, (params,))
+
+            except Exception as e:
+
+                print(f"Exception {e}")
+
+        # Commit changes.
+        try:
+            conn.commit()
+
+        except Exception as e:
+
+            print(f"Exception: {e}")
+
+
     def rotation_delta_rad(self, mat_prev, mat_curr):  
 
         # Extract 3x3 matrix of rotational values from SLAM Pose Zenoh Topic.                                                                                                                                               
@@ -129,182 +275,203 @@ class Turtlebot:
 
         # Get JSON from Zenoh Topic.
         data = json.loads(bytes(sample.payload))
-
-        # Check timestamps to skip or not.
-        try:
             
-            # Rate limit check - if less than 100 ms since the last frame was considered, skip immediately #
+         # Handle first-run case where timestamps may not be initialized                                                                                                                         
+        if self.data.get('pose', {}).get('timestamp') is None:                                                                                                                                  
+            self.data.setdefault('pose', {})['timestamp'] = time.time()                                                                                                      
+            return     
+                                                                                                                                                                     
+    
+        # Set time window to ignore new images in ms.
+        del_t = 100  # In miliseconds.
 
-            # Set time window to ignore new images in ms.
-            del_t = 100  # In miliseconds.
+        # Rate limit check - if less than 100 ms since the last frame was considered, skip immediately #                                                                                                                                                                   
+        if self.data['slam']['timestamp'] - self.data['pose']['timestamp'] <= 0.01 * del_t:
+            # Not enough time has elapsed.
+            return
 
-            # Treat self.data['slam']['timestamp'] as current time keeper. 0.01 coefficient converts del_t into ms.
-            if self.data['slam']['timestamp'] - self.data['pose']['timestamp'] <= 0.01 * del_t: 
-                # Not enough time has elapsed.
-                return
+        # Cache the latest robot pose from the odometry subscriber stored in internal data structure.
+        x = self.data["odometry"]["x"]
+        y = self.data["odometry"]["y"]
+        yaw = self.data["odometry"]["yaw"]
 
-            # Cache the latest robot pose from the odometry subscriber stored in internal data structure.
-            x = self.data["odometry"]["x"]
-            y = self.data["odometry"]["y"]
-            yaw = self.data["odometry"]["yaw"]
+        '''
+            Keyframe gate - compare the current pose against the pose of the last accepted keyframe:
+                If the robot has moved less than 0.5 m AND rotated less than 15 degrees, discard the frame (no inference)
+                If either threshold is exceeded, this frame is a keyframe - proceed to step 4
 
-            '''
-                Keyframe gate - compare the current pose against the pose of the last accepted keyframe:
-                    If the robot has moved less than 0.5 m AND rotated less than 15 degrees, discard the frame (no inference)
-                    If either threshold is exceeded, this frame is a keyframe - proceed to step 4
+        '''
 
-            '''
+        # Convert Zenoh SLAM Pose topic into rotational and positional vectors.
+        mat = np.array(data['pose']).reshape(3, 4) 
+        rotational = mat[:3, :3]
+        translational = mat[:, 3]
 
-            # Convert Zenoh SLAM Pose topic into rotational and positional vectors.
-            mat = np.array(data['pose']).reshape(3, 4) 
-            rotational = mat[:3, :3]
-            translational = mat[:, 3]
+        # First-run guard for rotational matrix.
+        if self.data.get('rotational') is None:                                                                                                                                                     
+            self.data['rotational'] = rotational
+            return   
 
-            # Set euclidean threshold.
-            del_euc = 0.5  # In m for Gazebo assuming one cube is 1m X 1m x 1m.
+        # Set euclidean threshold.
+        del_euc = 0.5  # In m for Gazebo assuming one cube is 1m X 1m x 1m.
 
-            # Set rotational threshold. Convert degrees into rads.
-            rot_thresh = np.radians(15)
+        # Set rotational threshold. Convert degrees into rads.
+        rot_thresh = np.radians(15)
 
-            # Calculate euclidean_dist.
-            euclidean_dist = np.sqrt((x - translational[0])**2 + (y - translational[1])**2)
+        # Calculate euclidean_dist.
+        euclidean_dist = np.sqrt((x - translational[0])**2 + (y - translational[1])**2)
 
-            # Calculate the rotational sweep.  Returns rads.
-            rotation = self.rotation_delta_rad(self.data['rotational'], rotational)
+        # Calculate the rotational sweep.  Returns rads.
+        rotation = self.rotation_delta_rad(self.data['rotational'], rotational)
 
-            # Check for distance and rotation thresholds.
-            if euclidean_dist <= del_euc and rotation <= rot_thresh:
-                # Neither threshold has been reached.  Discard.
-                return
+        # Check for distance and rotation thresholds.
+        if euclidean_dist <= del_euc and rotation <= rot_thresh:
+            # Neither threshold has been reached.  Discard.
+            return
+        
+        ####  All checks passed ###           
+
+        # Deserialize the CDR-encoded image and decode it to a numpy array.
+
+        '''
+            img_callback does this and stores image in internal data structure:
+            self.data['image']['current_image']
+
+        '''
+
+        # Create current image variable for readability.
+        curr_image = self.data['image']['current_image']
+
+        # Run YOLO inference on a single image.
+        results = self.yolo_model(curr_image)
+
+        keyframe_id = str(uuid.uuid4())  # one ID for this frame
+        detections = [] 
+
+        for result in results:
             
-            ####  All checks passed ###           
+            # See if there is a detection.
+            if len(result.boxes) == 0:
+                # Nothing detected.
+                continue
+                # Should we embed this anyway for later localization?
+            
+            else:
 
-            # Deserialize the CDR-encoded image and decode it to a numpy array.
+                if isinstance(img_data, np.ndarray):
+                    
+                    # Image is decoded.  use directly.
+                    img = curr_image
 
-            '''
-                img_callback does this and stores image in internal data structure:
-                self.data['image']['current_image']
-
-            '''
-
-            # Create current image variable for readability.
-            curr_image = self.data['image']['current_image']
-
-            # Run YOLO inference on a single image.
-            results = self.yolo_model(curr_image)
-
-            for result in results:
-                
-                # See if there is a detection.
-                if len(result.boxes) == 0:
-                    # Nothing detected.
-                    continue
-                    # Should we embed this anyway for later localization?
-                
                 else:
 
-                    # Get box coords of detected object.
-                    for box in result.boxes.xyxy:                                                                                                                                                               
-                        x1, y1, x2, y2 = box.tolist() 
+                    # Read in image.  Expected encoding: 'rgb8, bytes: 19437' output from ROS2.
+                    nparr = np.frombuffer(curr_image, np.uint8)                                                                                                                                                  
+                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)   
+
+                # Get box coords of detected object.
+                for box in result.boxes:
+
+                    # Get coords of box.
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()          
+
+                    # Get most probable class of box.                                                                                                                                         
+                    cls = int(box.cls[0].item())     
+
+                    # Get confidence.    
+                    confidence = float(box.conf[0].item())           
+
+                    # Get name of class.                                                                                                                                       
+                    class_name = result.names[cls]   
+
+                    # Crop image.
+                    cropped = img[int(y1):int(y2), int(x1):int(x2)]
+
+                    '''
+                        The assignment says to:
+                        Batch all crops through the CLIP encoder (ViT-B/32) to produce 512-dim L2-normalized embeddings
+
+                        However, I am going to create the embeds as the image comes.  
+                        The business logic to batch the clips 
+                        remains to satisfy the assignment requirements.
+
+                    '''
+
+                    # Add image to batch.
+                    self.data['batch_cropped_detections'].append(cropped)
+
+                    # Create PIL input for CLIP.
+                    pil_image = PILImage.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+
+                    # Preprocess for CLIP                                                                                                                                                                   
+                    image_tensor = self.preprocess(pil_image).unsqueeze(0).to(self.device)                                                                                                                            
                     
-                        # Get detected classes.
-                        classes = box.cls.tolist()
+                    # Get embeddings.
+                    with torch.no_grad():                                 
 
-                        # Get confidence.
-                        confidence = box.conf.tolist()
-
-                        # Get names.
-                        class_names = result.names  
-
-                        # Read in image.  Expected encoding: 'rgb8, bytes: 19437' output from ROS2.
-                        nparr = np.frombuffer(curr_image, np.uint8)                                                                                                                                                  
-                        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)   
-
-                        # Crop image.
-                        cropped = img[int(y1):int(y2), int(x1):int(x2)]
-
-                        '''
-                            The assignment says to:
-                            Batch all crops through the CLIP encoder (ViT-B/32) to produce 512-dim L2-normalized embeddings
-
-                            However, I am going to create the embeds as the image comes.  The business logic to batch the clips 
-                            remains to satisfy the assignment requirements.
-
-                        '''
-
-                        # Add image to batch.
-                        self.data['batch_cropped_detections'].append(cropped)
-
-                        # Create PIL input for CLIP.
-                        pil_image = PILImage.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
-
-                        # Preprocess for CLIP                                                                                                                                                                   
-                        image_tensor = self.preprocess(pil_image).unsqueeze(0).to(self.device)                                                                                                                            
-                        
                         # Get embeddings.
-                        with torch.no_grad():                                 
+                        image_features = self.clip_model.encode_image(image_tensor) 
 
-                            # Get embeddings.
-                            image_features = self.clip_model.encode_image(image_tensor) 
+                        # Apply L2 norm.
+                        image_features = image_features / image_features.norm(dim=-1, keepdim=True)  
 
-                            # Apply L2 norm.
-                            image_features = image_features / image_features.norm(dim=-1, keepdim=True)  
+                    detections.append({                                                                                                                                                                 
+                        'class': class_name,
+                        'confidence': confidence,                                                                                                                                                       
+                        'bbox': (x1, y1, x2, y2),
+                        'embedding': image_features.squeeze(0).tolist(),
+                        'embedding_dim': 512,                                                                                                                                                           
+                        'embedding_model': 'CLIP: ViT-B/32'
+                    })  
 
+                    '''
+                        Publish a JSON envelope to tb/detections containing:
+                            keyframe_id - monotonically increasing integer
+                            timestamp - wall clock time
+                            map_x, map_y, map_yaw - robot pose in map frame
+                            detections - array of \\{class, confidence, bbox, embedding, embedding_dim, embedding_model\\}
 
-                        '''
-                            Publish a JSON envelope to tb/detections containing:
-                                keyframe_id - monotonically increasing integer
-                                timestamp - wall clock time
-                                map_x, map_y, map_yaw - robot pose in map frame
-                                detections - array of \\{class, confidence, bbox, embedding, embedding_dim, embedding_model\\}
+                    '''
+                
+        # If detections publish.
+        if detections:
+            # Create JSON envelope.
+            json_envelope = {                                                                                                                                                                           
+                "keyframe_id": keyframe_id,
+                "timestamp": datetime.now().isoformat(),                                                                                                                                                
+                "map_x": self.data["odometry"]["x"],    
+                "map_y": self.data["odometry"]["y"],
+                "map_yaw": self.data["odometry"]["yaw"],                                                                                                                                                
+                "detections": detections                
+            }  
 
-                        '''
+            # Set topic.
+            topic = "tb/detections"
 
-                        # Create JSON envelope.
-                        json_envelope = {
-                            
-                                "keyframe_id": str(uuid.uuid4()),  # unique event ID
-                                "timestamp": datetime.now().isoformat(),
-                                "map_x": self.data["odometry"]["x"],
-                                "map_y": self.data["odometry"]["y"],
-                                "map_yaw": self.data["odometry"]["yaw"],
-                                "detections": [{
-                                    'class': classes,
-                                    'confidence': confidence,
-                                    'bbox': (x1, y1, x2, y2),
-                                    'embedding': image_features.tolist(),
-                                    'embedding_dims':512,
-                                    'embedding_model': 'CLIP: ViT-B/32'
+            # Serialize the data to JSON
+            serialized_data = json.dumps(json_envelope)
 
-                                }]
-                                
-                        }
+            # Publish topic to Zenoh.
+            self.session.put(topic, serialized_data.encode())
 
-                        # TEsting.
-                        for thing in json_envelope:
-                            #print(type(thing))
-                            print("thing")
+        '''
+            The detections callback is processing feed from the 'detector' container publishing to tb/detections.
+            I am publishing to tb/detections as per the assignment.
+            I am writing to the graph here to prevent conflict between the two sources publishing to tb/detections.
 
-                        # Set topic.
-                        topic = "tb/detections"
+        '''
 
-                        # Serialize the data to JSON
-                        serialized_data = json.dumps(json_envelope)
+        # Write to graph.
+        with psycopg.connect(
+            f"dbname={dbname} user={user} password={password} host={host} port={port}"
+            ) as conn:                                                                                                                                                                                  
+            self.write_to_graph(conn, json_envelope, graph='maze')
 
-                        # Publish topic to Zenoh.
-                        self.session.put(topic, serialized_data.encode())
+        # Update pose timestamp to now for rate limiting next call                                                                                                                          
+        self.data['pose']['timestamp'] = self.data['slam']['timestamp']
 
-        except (KeyError, TypeError):
-            # Timestamp not set.
-            try:
-
-                # Set timestamp.
-                self.data['pose']['timestamp'] = self.data['slam']['timestamp']
-
-            except Exception as e:
-
-                # Report error.
-                print(f"Exception thrown: {e}")           
+        # Update rotational matrix for next keyframe comparison.
+        self.data['rotational'] = rotational  
 
     def slam_status_callback(self, sample):
 
@@ -341,7 +508,7 @@ class Turtlebot:
         except Exception as e:
 
             # Display error.
-            print(f"Robot is stationary.  Assignment is asking for dynamic information.  Please move the bot and try again.")
+            print(f"Robot is stationary.  Assignment is asking for dynamic information.  Please move the bot and try again.\nError thrown {e}")
 
     def odom_callback(self, sample):
 
@@ -408,8 +575,9 @@ class Turtlebot:
             if self.image_queue.full():
                 try:
                     self.image_queue.get_nowait()
-                except:
-                    pass
+                except Exception as e:
+                    # Report error.
+                    print(f"Exception thrown: {e}")
 
             self.image_queue.put(img_data)
 
@@ -420,6 +588,21 @@ class Turtlebot:
 
         except Exception as e:
             print(f"Error in image callback: {e}")
+
+    def to_serializable(self, obj):                                                                                                                                                                   
+        if isinstance(obj, np.ndarray):                                                                                                                                                         
+            return obj.tolist()                                                                                                                                                                 
+        elif isinstance(obj, dict):                                                                                                                                                             
+            return {k: self.to_serializable(v) for k, v in obj.items()}                                                                                                                              
+        elif isinstance(obj, (list, tuple)):
+            return [self.to_serializable(i) for i in obj]                                                                                                                                            
+        elif isinstance(obj, np.integer):
+            return int(obj)                                                                                                                                                                     
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, bytes):
+            return obj.decode('utf-8')                                                                                                                                                          
+        return obj
 
     # Detection callback pulls latest image from queue
     def detections_callback(self, sample):
@@ -471,7 +654,7 @@ class Turtlebot:
         self.data['detections']['bbox_xyxy'] = detection['bbox']  
 
         # Report detection.
-        print(f"{self.data['detections']}", flush=True)
+        print(f"Detection: {self.data['detections']}", flush=True)
         
         # Publish data to Zenoh.
         """Serialize the data to JSON and publish it to Zenoh."""
@@ -480,8 +663,8 @@ class Turtlebot:
             # Define the topic dynamically (e.g., maze/{robot_id}/detections/v1/{event_id})
             topic = f"maze/{self.data['robot_id']}/detections/v1/{self.data['event_id']}"
 
-            # Serialize the data to JSON
-            serialized_data = json.dumps(self.data)
+            # Serialize the data to JSON.  Catch numpy array errors.
+            serialized_data = json.dumps(self.to_serializable(self.data))
 
             # Publish to Zenoh topic
             self.session.put(topic, serialized_data.encode())
@@ -565,6 +748,7 @@ class Turtlebot:
                     ))
                 except Exception as e:
                     print(f"Failed to write to detection_events.  Error: {e}")
+                    return
                 
                 # Get detections.
                 detection = data["detections"]
@@ -777,7 +961,7 @@ def create_embeddings():
 
                 except Exception as e:
                     # Report problems.
-                    print(e)
+                    print(f"Exception thrown: {e}")
 
 
     except Exception as e:
