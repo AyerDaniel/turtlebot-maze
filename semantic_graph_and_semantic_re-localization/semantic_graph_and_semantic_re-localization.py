@@ -4,6 +4,8 @@ Object-detection pipeline from TurtleBot3 simulation through Zenoh into PostgreS
 using an image queue to pair images with detections.
 """
 
+import threading
+
 import zenoh
 import json
 import time
@@ -15,6 +17,7 @@ import uuid
 import math
 import rclpy
 import hashlib
+import pandas as pd
 
 from psycopg.rows import dict_row
 import clip
@@ -26,6 +29,8 @@ from pgvector.psycopg import register_vector
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import normalize
 from sklearn.metrics.pairwise import cosine_distances  
+
+from scipy.spatial import cKDTree
 
 # Import packages for deserializing Zenoh output from ROS2 sensor_msgs/msg/Image.
 from rclpy.serialization import deserialize_message
@@ -124,8 +129,8 @@ class Turtlebot:
         print("Subscribed to tb/detections", flush=True)
 
         # Subscribe to detections with wildcard in topic
-        self.sub_maze_detections = self.session.declare_subscriber("maze/**/detections/v1/*", self.write_detections)
-        print("Subscribed to maze/**/detections/v1/*", flush=True)
+        # self.sub_maze_detections = self.session.declare_subscriber("maze/**/detections/v1/*", self.write_detections)
+        # print("Subscribed to maze/**/detections/v1/*", flush=True)
 
         # Subscribe to odom.
         self.sub_robot_state = self.session.declare_subscriber("odom", self.odom_callback)
@@ -141,6 +146,8 @@ class Turtlebot:
 
         self.sub_slam = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
         print(f"Subscribed to slam/status", flush=True)
+
+    # End of zenoh subscribing.
 
     def write_to_graph(self, conn, json_, graph='maze'):
         # This method writes detections to the graph for later use.
@@ -247,7 +254,7 @@ class Turtlebot:
                 SELECT * FROM cypher('maze', $$
                     MATCH (r:Run {run_id: $run_id})
                     CREATE (kf:Keyframe {keyframe_id: $kf_id, timestamp: $ts})
-                    CREATE (p:Pose {x: $x, y: $y, yaw: $yaw})
+                    CREATE (p:Pose {x: $x, y: $y, yaw: $yaw, dbscan_group: -1})
                     CREATE (r)-[:HAS_KEYFRAME]->(kf)
                     CREATE (kf)-[:HAS_POSE]->(p)
                     RETURN kf
@@ -266,6 +273,7 @@ class Turtlebot:
                   "confidence": det['confidence'],
                   "bbox":       json.dumps(det['bbox']),   # store as JSON string
                   "emb_model":  det['embedding_model'],
+                  "embedding":  det['embedding'],
               })
 
             try:
@@ -276,7 +284,8 @@ class Turtlebot:
                             CREATE (obs:Observation {
                                 confidence:      $confidence,
                                 bbox:            $bbox,
-                                embedding_model: $emb_model
+                                embedding_model: $emb_model,
+                                embedding:       $embedding
                             })
                             CREATE (kf)-[:HAS_OBSERVATION]->(obs)
                             CREATE (obs)-[:CORRESPONDS_TO]->(obj)
@@ -297,6 +306,8 @@ class Turtlebot:
             print(f"Exception: {e}")
 
 
+    # End of write_to_graph().
+
     def rotation_delta_rad(self, mat_prev, mat_curr):  
 
         # Extract 3x3 matrix of rotational values from SLAM Pose Zenoh Topic.                                                                                                                                               
@@ -311,6 +322,29 @@ class Turtlebot:
         
         return np.arccos(cos_angle)        
 
+    # End of rotation_delta_rad().
+    def write_embeddings(self, conn, detections):                                                                                                                                               
+      cursor = conn.cursor()                                                                                                                                                                  
+      register_vector(conn)                                                                                                                                                                   
+                                                                                                                                                                                              
+      for det in detections:                                                                                                                                                                
+          try:
+              cursor.execute("""
+                  INSERT INTO detection_embeddings (keyframe_id, model, embedding)
+                  VALUES (%s, %s, %s)
+                  ON CONFLICT DO NOTHING                                                                                                                                                      
+              """, (
+                  det['keyframe_id'],                                                                                                                                                         
+                  det['embedding_model'],                                                                                                                                                   
+                  det['embedding']
+              ))
+          except Exception as e:
+              print(f"Failed to write embedding: {e}", flush=True)
+                                                                                                                                                                                              
+      conn.commit()
+
+    # End of write_embeddings().
+    
     def slam_pose_callback(self, sample):
 
         # Get JSON from Zenoh Topic.
@@ -321,7 +355,6 @@ class Turtlebot:
             self.data.setdefault('pose', {})['timestamp'] = time.time()                                                                                                      
             return     
                                                                                                                                                                      
-    
         # Set time window to ignore new images in ms.
         del_t = 100  # In miliseconds.
 
@@ -397,13 +430,57 @@ class Turtlebot:
             # See if there is a detection.
             if len(result.boxes) == 0:
                 # Nothing detected.
-                continue
-                # Should we embed this anyway for later localization?
+
+                # Create PIL input for CLIP.  We're encoding the entire image.
+                pil_image = PILImage.fromarray(cv2.cvtColor(curr_image, cv2.COLOR_BGR2RGB))
+
+                # Preprocess for CLIP                                                                                                                                                                   
+                image_tensor = self.preprocess(pil_image).unsqueeze(0).to(self.device)
+
+                # Get embeddings.
+                with torch.no_grad():                                 
+
+                    # Get embeddings.
+                    image_features = self.clip_model.encode_image(image_tensor) 
+
+                    # Apply L2 norm.
+                    image_features = image_features / image_features.norm(dim=-1, keepdim=True) 
+                
+                # Create JSON envelope.
+                json_envelope = {
+                    "event_id": str(uuid.uuid4()),                                                                                                                                                          
+                    "run_id": self.data["run_id"],
+                    "robot_id": self.data["robot_id"],
+                    "sequence": self.data["sequence"],
+                    "odometry": self.data["odometry"],                                                                                                                                                      
+                    "tf": self.data["tf"],            
+                    "keyframe_id": keyframe_id,                                                                                                                                                             
+                    "timestamp": datetime.now().isoformat(),
+                    "map_x": self.data["odometry"]["x"],    
+                    "map_y": self.data["odometry"]["y"],                                                                                                                                                    
+                    "map_yaw": self.data["odometry"]["yaw"],
+                    "detections": []                                                                                                                                                               
+                }        
+                
+                # Write to graph.
+                with psycopg.connect(
+                    f"dbname={dbname} user={user} password={password} host={host} port={port}"
+                    ) as conn:                                                                                                                                                                                  
+                    self.write_to_graph(conn, json_envelope, graph='maze')
+
+                    # Store embeddings.
+                    self.write_embeddings(conn, detections)
+
+                # Update pose timestamp to now for rate limiting next call                                                                                                                          
+                self.data['pose']['timestamp'] = self.data['slam']['timestamp']
+
+                # Update rotational matrix for next keyframe comparison.
+                self.data['rotational'] = rotational
+                
             
             else:
 
-                # Set img.
-                img = curr_image
+                # Something found.
 
                 # Get box coords of detected object.
                 for box in result.boxes:
@@ -421,7 +498,7 @@ class Turtlebot:
                     class_name = result.names[cls]   
 
                     # Crop image.
-                    cropped = img[int(y1):int(y2), int(x1):int(x2)]
+                    cropped = curr_image[int(y1):int(y2), int(x1):int(x2)]
 
                     '''
                         The assignment says to:
@@ -457,7 +534,8 @@ class Turtlebot:
                         'bbox': (x1, y1, x2, y2),
                         'embedding': image_features.squeeze(0).tolist(),
                         'embedding_dim': 512,                                                                                                                                                           
-                        'embedding_model': 'CLIP: ViT-B/32'
+                        'embedding_model': 'CLIP: ViT-B/32',
+                        'keyframe_id': keyframe_id
                     })  
 
                     '''
@@ -469,50 +547,56 @@ class Turtlebot:
 
                     '''
                 
-        # If detections publish.
-        if detections:
-            # Create JSON envelope.
-            json_envelope = {                                                                                                                                                                           
-                "keyframe_id": keyframe_id,
-                "timestamp": datetime.now().isoformat(),                                                                                                                                                
-                "map_x": self.data["odometry"]["x"],    
-                "map_y": self.data["odometry"]["y"],
-                "map_yaw": self.data["odometry"]["yaw"],                                                                                                                                                
-                "detections": detections,
-                "class" : detections[0]['class'],
-                "confidence" : detections[0]['confidence'],
-                "bbox": detections[0]['bbox'],
+                # If detections publish.
+                if detections:
+                    # Create JSON envelope.
+                    json_envelope = {
+                        "event_id": str(uuid.uuid4()),                                                                                                                                                          
+                        "run_id": self.data["run_id"],
+                        "robot_id": self.data["robot_id"],
+                        "sequence": self.data["sequence"],
+                        "odometry": self.data["odometry"],                                                                                                                                                      
+                        "tf": self.data["tf"],            
+                        "keyframe_id": keyframe_id,                                                                                                                                                             
+                        "timestamp": datetime.now().isoformat(),
+                        "map_x": self.data["odometry"]["x"],    
+                        "map_y": self.data["odometry"]["y"],                                                                                                                                                    
+                        "map_yaw": self.data["odometry"]["yaw"],
+                        "detections": detections                                                                                                                                                               
+                    }    
 
+                    # Set topic.
+                    topic = "tb/detections"
 
-            }  
+                    # Serialize the data to JSON
+                    serialized_data = json.dumps(json_envelope)
 
-            # Set topic.
-            topic = "tb/detections"
+                    # Publish topic to Zenoh.
+                    self.session.put(topic, serialized_data.encode())
 
-            # Serialize the data to JSON
-            serialized_data = json.dumps([json_envelope])
+                # Write to graph.
+                with psycopg.connect(
+                    f"dbname={dbname} user={user} password={password} host={host} port={port}"
+                    ) as conn:                                                                                                                                                                                  
+                    self.write_to_graph(conn, json_envelope, graph='maze')
 
-            # Publish topic to Zenoh.
-            self.session.put(topic, serialized_data.encode())
+            # Update pose timestamp to now for rate limiting next call                                                                                                                          
+            self.data['pose']['timestamp'] = self.data['slam']['timestamp']
 
-        '''
-            The detections callback is processing feed from the 'detector' container publishing to tb/detections.
-            I am publishing to tb/detections as per the assignment.
-            I am writing to the graph here to prevent conflict between the two sources publishing to tb/detections.
+            # Update rotational matrix for next keyframe comparison.
+            self.data['rotational'] = rotational  
 
-        '''
+        ##  DBSCAN ##
+            
+            '''
+                Online DBSCAN as described will fail.  
+                We sample the environemnt every 0.5m, but have a grouping radius of 1.5m.
+                Therefore, online DBSCAN will simple grow one group out infinitely.
+                I am switching to offline DBSCAN for group clustering assignments.
+                This will provide information for the remapping function.
 
-        # Write to graph.
-        with psycopg.connect(
-            f"dbname={dbname} user={user} password={password} host={host} port={port}"
-            ) as conn:                                                                                                                                                                                  
-            self.write_to_graph(conn, json_envelope, graph='maze')
-
-        # Update pose timestamp to now for rate limiting next call                                                                                                                          
-        self.data['pose']['timestamp'] = self.data['slam']['timestamp']
-
-        # Update rotational matrix for next keyframe comparison.
-        self.data['rotational'] = rotational  
+            ''' 
+    # End of slam_pose_callback().
 
     def slam_status_callback(self, sample):
 
@@ -521,7 +605,9 @@ class Turtlebot:
 
         # Get timestamp from SLAM status.
         self.data['slam']['timestamp'] = data['timestamp']
-        
+    
+    # End of slam_status_callback.
+
     def tf_callback(self, sample):
 
         try:
@@ -550,6 +636,8 @@ class Turtlebot:
 
             # Display error.
             print(f"Robot is stationary.  Assignment is asking for dynamic information.  Please move the bot and try again.\nError thrown {e}")
+
+    # End of tf_callback()
 
     def odom_callback(self, sample):
 
@@ -587,7 +675,8 @@ class Turtlebot:
         except Exception as e:
             print(f"Error in odometry callback: {e}")
 
-    # Image callback to store the image in queue
+    # End of odom_callback().
+
     def img_callback(self, sample):
         try:
             # Deserialize the message
@@ -630,6 +719,8 @@ class Turtlebot:
         except Exception as e:
             print(f"Error in image callback: {e}")
 
+    # End of img_callback().
+
     def to_serializable(self, obj):                                                                                                                                                                   
         if isinstance(obj, np.ndarray):                                                                                                                                                         
             return obj.tolist()                                                                                                                                                                 
@@ -645,73 +736,33 @@ class Turtlebot:
             return obj.decode('utf-8')                                                                                                                                                          
         return obj
 
+    # End of to_serializable.
+
     # Detection callback pulls latest image from queue
     def detections_callback(self, sample):
-        if self.image_queue.empty():
-
-            return
-
-        try:
-
-            detections = json.loads(sample.payload.to_bytes())
-
-        except Exception as e:
-
-            print(f"Failed to parse detection: {e}", flush=True)
-            return
-
-        if not detections:
+ 
+        if not sample:
 
             return
  
-        detection = detections[0]
-
-        # Get the latest image from the queue
-        try:
-            img = self.image_queue.get_nowait()
-
-        except:
-
-            print("Failed to get image from queue", flush=True)
-            return
-
         # Store a unique detection id.
-        self.data["event_id"] = str(uuid.uuid4())
-        self.data['detections']['det_id'] = str(uuid.uuid4())  # unique det ID
-
-        # Store the class id from item.
-        from coco_dict import coco_item_class_dict
-
-        self.data['detections']['class_id'] = coco_item_class_dict[detection['class']]
-
-        # Store class name.
-        self.data['detections']['class_name'] = detection['class']
-
-        # Store confidence.
-        self.data['detections']['confidence'] = detection['confidence']
-
-        # Store bbox.
-        self.data['detections']['bbox_xyxy'] = detection['bbox']  
-
-        # Report detection.
-        print(f"Detection: {self.data['detections']}", flush=True)
-        
+        event_id = str(uuid.uuid4())
+                
         # Publish data to Zenoh.
         """Serialize the data to JSON and publish it to Zenoh."""
         try:
 
             # Define the topic dynamically (e.g., maze/{robot_id}/detections/v1/{event_id})
-            topic = f"maze/{self.data['robot_id']}/detections/v1/{self.data['event_id']}"
-
-            # Serialize the data to JSON.  Catch numpy array errors.
-            serialized_data = json.dumps(self.to_serializable(self.data))
+            topic = f"maze/{self.data['robot_id']}/detections/v1/{event_id}"
 
             # Publish to Zenoh topic
-            self.session.put(topic, serialized_data.encode())
+            self.session.put(topic, sample.payload.to_bytes())
 
         except Exception as e:
             print(f"Failed to publish to Zenoh: {e}") 
     
+    # End of detections_callback().
+
     def write_detections(self, sample):
     # Write json to db.
 
@@ -854,6 +905,8 @@ class Turtlebot:
         except Exception as e:
             print(f"Error inserting data: {e}")
 
+    # End of write_detections().
+
     
     def run(self):
         try:
@@ -867,7 +920,7 @@ class Turtlebot:
 
             self.sub_images.undeclare()
             self.sub_detections.undeclare()
-            self.sub_maze_detections.undeclare()
+            # self.sub_maze_detections.undeclare()
             self.sub_robot_state.undeclare()
             self.sub_TF.undeclare()
 
@@ -888,179 +941,162 @@ def detect_objects(turtlebot):
     # Run pipeline.
     turtlebot.run()
 
-def create_embeddings():
 
-    '''
+def dbscan():
+        # This function performs dbscan on the sampled space.
 
-        This function assumes the postgres container is running.
-        This container should have the tables holding the detections and detection events.
+        def ag(v):                                                                                                                                                                                  
+            if v is None: return None                                                                                                                                                               
+            s = str(v)                                                                                                                                                                              
+            return s.strip('"')
 
-    '''
-    try:
+        # End of ag().
+
+        def parse_node(v):                                                                                                                                                                          
+            s = str(v)                                                                                                                                                                              
+            if '::' in s:                                                                                                                                                                           
+                s = s.rsplit('::', 1)[0]                                                                                                                                                            
+            return json.loads(s)
+
+        # End parse_node()
+
+        try:
+            with psycopg.connect(
+                f"dbname={dbname} user={user} password={password} host={host} port={port}"
+                ) as conn:    
+
+                    # Build cursor.
+                    cursor = conn.cursor()
+
+                    # Activate AGE.
+                    cursor.execute("LOAD 'age'")                                                                                                                                                                   
+                    cursor.execute("SET search_path = ag_catalog, \"$user\", public")
+
+                    # All keyframes with pose coords                                                                                                                                                            
+                    cursor.execute("""                                                                                                                                                                             
+                        SELECT * FROM cypher('maze', $$                                                                                                                                                         
+                            MATCH (kf:Keyframe)-[:HAS_POSE]->(p:Pose)                                                                                                                                           
+                            RETURN kf, p.x, p.y, p.dbscan_group                                                                                                                                                                 
+                        $$) AS (kf agtype, x agtype, y agtype, dbscan_group agtype)
+                    """)       
+
+                    all_kfs = {                                                                                                                                                                                 
+                        (props := parse_node(row[0])['properties'])['keyframe_id']: {
+                            **props,                                                                                                                                                                            
+                            'x': float(ag(row[1])),
+                            'y': float(ag(row[2])),                                                                                                                                                             
+                            'dbscan_group': int(ag(row[3]))
+                        }                                                                                                                                                                                       
+                        for row in cursor.fetchall()
+                    }      
+                                                                                                                                                                                                                
+                    # Keyframe IDs that have at least one detection                                                                                                                                             
+                    cursor.execute("""
+                        SELECT * FROM cypher('maze', $$                                                                                                                                                         
+                            MATCH (kf:Keyframe)-[:HAS_OBSERVATION]->()
+                            RETURN DISTINCT kf.keyframe_id                                                                                                                                                      
+                        $$) AS (keyframe_id agtype)
+                    """)                                   
+
+                    # Get nodes to filter for detections.                                                                                                                                                     
+                    det_ids = {ag(r[0]) for r in cursor.fetchall()}
+
+                    # Get ids of nodes with detections.                                                                                                                                                                                
+                    det_kfs = {kf_id: all_kfs[kf_id] for kf_id in det_ids if kf_id in all_kfs}
+
+                    if not det_kfs:                                                                                                                                                                             
+                        print("DBSCAN: no detection keyframes yet, skipping.", flush=True)                                                                                                                      
+                        return    
+                    
+                    # Get spatial coordinates of detections.
+                    det_coords = np.array([(props['x'], props['y']) for props in det_kfs.values()]) 
+
+                    # DBSCAN coords for groupings.  I expect 4 as of 03282026
+                    db_eps = 1.5
+                    min_samples = 3
+                    
+                    
+                        
+                    db = DBSCAN(eps = db_eps, min_samples = min_samples, metric='euclidean').fit(det_coords)
+
+                    # Assign clusters.
+                    det_cluster = {kf_id: int(label) for kf_id, label in zip(det_kfs.keys(), db.labels_)}
+
+                    # Build KD-tree from non-noise clustered detection keyframes.                                                                                                                       
+                    clustered = [                                                                                                                                                                       
+                        (kf_id, props['x'], props['y'], det_cluster[kf_id])                                                                                                                             
+                        for kf_id, props in det_kfs.items()
+                        if det_cluster[kf_id] >= 0
+                    ]                                                   
+
+                    if not clustered:                                                                                                                                                                           
+                        print("DBSCAN: no clusters formed — all detections are noise. Try lowering min_samples.", flush=True)
+                        return 
+                                                                                                                                    
+                    clustered_coords = np.array([(x, y) for _, x, y, _ in clustered])
+                    clustered_labels = np.array([label for _, _, _, label in clustered])                                                                                                                
+                    tree = cKDTree(clustered_coords)                                                                                                                                                    
+            
+                    # Assign noise detection keyframes to nearest valid cluster.                                                                                                                        
+                    for kf_id, label in list(det_cluster.items()):
+                        if label == -1:
+                            _, idx = tree.query([det_kfs[kf_id]['x'], det_kfs[kf_id]['y']])
+                            det_cluster[kf_id] = int(clustered_labels[idx])
+                                                                                                                                                                                                        
+                    # Assign non-detection keyframes to nearest valid cluster.
+                    for kf_id, props in all_kfs.items():                                                                                                                                                
+                        if kf_id not in det_cluster:                                                                                                                                                    
+                            _, idx = tree.query([props['x'], props['y']])
+                            det_cluster[kf_id] = int(clustered_labels[idx])                                                                                                                             
+                            
+                    # Write group assignments back to Pose nodes.                                                                                                                                       
+                    for kf_id, group_id in det_cluster.items():
+                        params = json.dumps({"kf_id": kf_id, "group_id": group_id})                                                                                                                     
+                        cursor.execute("""                                                                                                                                                              
+                            SELECT * FROM cypher('maze', $$
+                                MATCH (kf:Keyframe {keyframe_id: $kf_id})-[:HAS_POSE]->(p:Pose)                                                                                                         
+                                SET p.dbscan_group = $group_id                                                                                                                                          
+                                RETURN p
+                            $$, %s::agtype) AS (p agtype)                                                                                                                                               
+                        """, (params,))
+
+                    conn.commit()    
+                    print(f"DBSCAN complete. Assigned {len(det_cluster)} keyframes.", flush=True)
         
-        # Set device and load model to create embeddings.
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model, preprocess = clip.load("ViT-B/32", device=device)
-
-        with psycopg.connect(
-            f"dbname={dbname} user={user} password={password} host={host} port={port}",
-            row_factory=dict_row
-        ) as conn:
-            
-            # Create a cursor. 
-            cursor = conn.cursor()
-
-            # Prepare query sql.
-            query_sql = """
-                SELECT det_pk, class_name, x1, y1, x2, y2, image_raw FROM detections LEFT JOIN detection_events ON detections.event_id = detection_events.event_id
-            """
-            
-            # Execute query.
-            cursor.execute(query_sql)
-
-            # Get all detections.
-            detections = cursor.fetchall()
-
-            # Create embeddings for each row result.  Each row is a detection.
-            for row in detections:
-                
-                # Store each returned field as a variable.
-                det_pk = row['det_pk']                                                                                                                                                                      
-                # event_id = row['event_id']
-                # det_id = row['det_id']                                                                                                                                                                      
-                # class_id = row['class_id']
-                class_name = row['class_name']                                                                                                                                                              
-                # confidence = row['confidence']
-                x1 = row['x1']                                                                                                                                                                              
-                y1 = row['y1']                                                                                                                                                                              
-                x2 = row['x2']                                                                                                                                                                              
-                y2 = row['y2']                                                                                                                                                                              
-                # timestamp = row['timestamp']
-                # run_id = row['run_id']
-                # robot_id = row['robot_id']                                                                                                                                                                  
-                # sequence = row['sequence']
-                # time_in_run = row['time_in_run']                                                                                                                                                            
-                # image_frame_id = row['image_frame_id']
-                # image_sha256 = row['image_sha256']                                                                                                                                                          
-                # width = row['width']                                                                                                                                                                        
-                # height = row['height']                                                                                                                                                                      
-                # encoding = row['encoding']                                                                                                                                                                  
-                # x = row['x']                                                                                                                                                                                
-                # y = row['y']    
-                # yaw = row['yaw']
-                # vx = row['vx']                                                                                                                                                                              
-                # vy = row['vy']                                                                                                                                                                              
-                # wz = row['wz']                                                                                                                                                                              
-                # tf_ok = row['tf_ok']                                                                                                                                                                        
-                # t_base_camera = row['t_base_camera']
-                # raw_event = row['raw_event']
-                image_raw = row['image_raw']
-
-                # Read in image.  Expected encoding: 'rgb8, bytes: 19437' output from ROS2.
-                nparr = np.frombuffer(image_raw, np.uint8)                                                                                                                                                  
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)                                                                                                                                                 
-                
-                # Crop image to bbox coords.
-                cropped = img[int(y1):int(y2), int(x1):int(x2)] 
-
-                # Create PIL input for CLIP.
-                pil_image = PILImage.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
-
-                # Preprocess for CLIP                                                                                                                                                                   
-                image_tensor = preprocess(pil_image).unsqueeze(0).to(device)                                                                                                                            
-                
-                # Get embeddings.
-                with torch.no_grad():                                                                                                                                                                   
-                    image_features = model.encode_image(image_tensor)                                                                                                                                   
-                
-                # Create sql to write to new table.
-                write_embeddings_sql = '''
-                    INSERT INTO detection_embeddings (det_pk, model, embedding) VALUES (%s, %s, %s)
-                    ON CONFLICT (det_pk) DO NOTHING
-                '''
-
-                # Move embedding to cpu.
-                image = image_features.cpu()
-
-                # Convert to numpy array.
-                image = image.numpy()
-                
-                # Flatten, is [1, 512] for some reason.
-                image = image.flatten()
-                
-                # Convert to list for psycopg.
-                image = image.tolist()
-
-                try:
-
-                    # Stage write to table.
-                    cursor.execute(write_embeddings_sql, (row['det_pk'], row['class_name'], image))
-
-                    # Commit to db.
-                    conn.commit()
-
-                except Exception as e:
-                    # Report problems.
-                    print(f"Exception thrown: {e}")
+        except Exception as e:
+          print(f"DBSCAN thread exception: {e}", flush=True)                                                                                                                                  
+          import traceback
+          traceback.print_exc()
 
 
-    except Exception as e:
-        print(f"Error inserting data: {e}")
+    # End of dbscan().
 
-def do_age():
-
-    # Connect to db.
-    try:
-            
-        with psycopg.connect(
-                f"dbname={dbname} user={user} password={password} host={host} port={port}",
-                row_factory=dict_row
-            ) as conn:
-            
-            # Create cursor.
-            cursor = conn.cursor()
-
-            # Prepare query sql.
-            query_sql = """
-                SELECT * FROM detections LEFT JOIN detection_events ON detections.event_id = detection_events.event_id
-            """
-
-            # List to store x and y values.
-            coords = []
-            det_pks = []
-
-            # Get detections.
-            cursor.execute(query_sql)
-            detections = cursor.fetchall()
-
-            for row in detections:
-                
-                # Store det_pk.
-                det_pks.append(row['det_pk'])
-
-                # Store detection's coordinates.
-                coords.append((row['x'], row['y']))
+def slam_counter(sample, n=10, count=[0]):
+    # Fire dbscan every n slam topic receipts.
    
-            # Run DBSCAN.  Set min_samples to 1 because all objects occur at least once.
-            dbscan = DBSCAN(eps=0.06, min_samples=1, metric='cosine')
-            labels = dbscan.fit_predict(coords)   
+    # Increment counter.
+    count[0] += 1
 
-            # Display results.
-            for det_pk, label in zip(det_pks, labels):                                                                                                                                                  
-                print(f"det_pk: {det_pk}, cluster: {label}")
+    # Fire every n times.
+    if count[0] % n == 0:
+        threading.Thread(target=dbscan, daemon=True).start()
 
-
-    except Exception as e:
-        
-        print(f"psycopg connection to db threw exception: {e}")
+    
+# End of slam_counter().
 
 if __name__ == "__main__":
     
     # Instantiate bot.
     turtlebot = Turtlebot(table, show_camera=False)
 
-    # Run steps in assignments.
-    # detect_objects(turtlebot)
-    # create_embeddings()
-    # do_age()
+    # Run dbscan.
+
+    # Subscribe to Zenoh topic. 
+    sub = turtlebot.session.declare_subscriber(                                                                                                                                             
+          "tb/slam/pose",
+          slam_counter
+      )     
+    
+    
+    detect_objects(turtlebot)
 
