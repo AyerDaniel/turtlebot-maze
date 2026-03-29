@@ -12,6 +12,8 @@ import time
 import psycopg
 import cv2
 import numpy as np
+from numpy.linalg import norm
+
 from queue import Queue
 import uuid
 import math
@@ -81,7 +83,7 @@ class Turtlebot:
                 "tf_ok": False,                                                                                                                                                                     
             },          
             "detections": {                                                                                                                                                                         
-                "det_id": None,
+                "det_pk": None,
                 "class_id": None,
                 "class_name": None,                                                                                                                                                                 
                 "confidence": None,
@@ -149,7 +151,88 @@ class Turtlebot:
 
     # End of zenoh subscribing.
 
-    def write_to_graph(self, conn, json_, graph='maze'):
+    def relocalize(self, conn, det_records):
+        """Given det_records from the current keyframe, find the top-3 most likely Places.
+
+        Uses pgvector KNN to find visually similar stored embeddings, follows
+        Observation → Object → Keyframe → Place via dbscan_group on the Pose node.
+        """
+        if not det_records:
+            return
+
+        register_vector(conn)
+        cursor = conn.cursor()
+
+        # Activate AGE on this connection.
+        cursor.execute("LOAD 'age'")
+        cursor.execute("SET search_path = ag_catalog, \"$user\", public")
+
+        place_scores = {}
+
+        for rec in det_records:
+            emb = rec['embedding']
+
+            # KNN search — top 10 most similar stored embeddings.
+            cursor.execute("""
+                SELECT de.det_pk, 1 - (de.embedding <=> %s::vector) AS similarity
+                FROM detection_embeddings de
+                ORDER BY de.embedding <=> %s::vector
+                LIMIT 10
+            """, (emb, emb))
+
+            knn_rows = cursor.fetchall()
+            if not knn_rows:
+                continue
+
+            for det_pk, similarity in knn_rows:
+                # Follow det_pk → Observation → Keyframe → Pose (dbscan_group).
+                obs_params = json.dumps({"det_pk": det_pk})
+                cursor.execute("""
+                    SELECT * FROM cypher('maze', $$
+                        MATCH (obs:Observation {det_pk: $det_pk})
+                            <-[:HAS_OBSERVATION]-(kf:Keyframe)
+                            -[:HAS_POSE]->(p:Pose)
+                        RETURN p.dbscan_group
+                    $$, %s::agtype) AS (dbscan_group agtype)
+                """, (obs_params,))
+
+                row = cursor.fetchone()
+                if row is None:
+                    continue
+
+                group = ag(row[0])
+                if group is None or group == '-1':
+                    continue
+
+                place_scores[group] = place_scores.get(group, 0.0) + float(similarity)
+
+        if not place_scores:
+            print("Relocalize: no candidate places found.", flush=True)
+            return
+
+        # Rank and print top-3.
+        ranked = sorted(place_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        print(f"Relocalize — top-3 candidate places:", flush=True)
+        for rank, (group_id, score) in enumerate(ranked, 1):
+            # Get centroid of this place's keyframes for pose hypothesis.
+            place_params = json.dumps({"place_id": f"place_{group_id}"})
+            cursor.execute("""
+                SELECT * FROM cypher('maze', $$
+                    MATCH (pl:Place {place_id: $place_id})
+                    RETURN pl.centroid_x, pl.centroid_y
+                $$, %s::agtype) AS (cx agtype, cy agtype)
+            """, (place_params,))
+            place_row = cursor.fetchone()
+            if place_row:
+                cx = ag(place_row[0])
+                cy = ag(place_row[1])
+                print(f"  #{rank} place_{group_id}  score={score:.3f}  pose=({cx}, {cy})", flush=True)
+            else:
+                print(f"  #{rank} place_{group_id}  score={score:.3f}", flush=True)
+
+    # End of relocalize().
+
+    def write_to_graph(self, conn, json_, det_records, graph='maze'):
         # This method writes detections to the graph for later use.
 
         def label_exists(cursor, graph, label):                                                                                                                                                     
@@ -265,46 +348,121 @@ class Turtlebot:
 
             print(f"Exception {e}")
 
-        # store detections.     
-        for det in json_.get('detections', []):
-            params = json.dumps({
-                  "kf_id":      kf_id,
-                  "class_name": det['class'],
-                  "confidence": det['confidence'],
-                  "bbox":       json.dumps(det['bbox']),   # store as JSON string
-                  "emb_model":  det['embedding_model'],
-                  "embedding":  det['embedding'],
-              })
-
             try:
+                robot_x = json_['map_x']
+                robot_y = json_['map_y']
+                emb = np.array(det['embedding'])
+
+                fusion_params = json.dumps({"class_name": det['class_name']})
                 cursor.execute("""
                         SELECT * FROM cypher('maze', $$
-                            MATCH (kf:Keyframe {keyframe_id: $kf_id})
-                            MERGE (obj:Object {class_name: $class_name})
-                            CREATE (obs:Observation {
-                                confidence:      $confidence,
-                                bbox:            $bbox,
-                                embedding_model: $emb_model,
-                                embedding:       $embedding
+                            MATCH (obj:Object {class_name: $class_name})
+                            RETURN obj.object_id, obj.mean_x, obj.mean_y, obj.mean_embedding,
+                                    obj.observation_count, obj.first_seen
+                        $$, %s::agtype) AS (
+                            object_id agtype, mean_x agtype, mean_y agtype,
+                            mean_embedding agtype, observation_count agtype, first_seen agtype
+                        )
+                    """, (fusion_params,))
+
+                best_id = None
+                best_sim = -1.0
+                for row in cursor.fetchall():
+                    obj_id    = ag(row[0])
+                    obj_x     = float(ag(row[1]))
+                    obj_y     = float(ag(row[2]))
+                    obj_emb   = np.array(json.loads(ag(row[3])))
+                    spatial_d = np.sqrt((robot_x - obj_x)**2 + (robot_y - obj_y)**2)
+                    cos_sim   = float(np.dot(emb, obj_emb))  # both L2-normalised
+
+                    if cos_sim >= 0.7 and spatial_d <= 3.0 and cos_sim > best_sim:
+                        best_sim = cos_sim
+                        best_id  = obj_id
+
+                now_iso = datetime.now().isoformat()
+
+                if best_id is not None:
+                    # Merge into existing Object — update running averages.
+                    merge_params = json.dumps({
+                        "object_id": best_id,
+                        "rx": robot_x, "ry": robot_y,
+                        "emb": det['embedding'],
+                        "last_seen": now_iso,
+                    })
+                    cursor.execute("""
+                        SELECT * FROM cypher('maze', $$
+                            MATCH (obj:Object {object_id: $object_id})
+                            SET obj.mean_x = (obj.mean_x * obj.observation_count + $rx)
+                                            / (obj.observation_count + 1),
+                                obj.mean_y = (obj.mean_y * obj.observation_count + $ry)
+                                            / (obj.observation_count + 1),
+                                obj.observation_count = obj.observation_count + 1,
+                                obj.last_seen = $last_seen
+                            RETURN obj.object_id
+                        $$, %s::agtype) AS (object_id agtype)
+                    """, (merge_params,))
+                    matched_id = best_id
+                else:
+                    # Create new Object landmark.
+                    new_obj_id = str(uuid.uuid4())
+                    create_params = json.dumps({
+                        "object_id":         new_obj_id,
+                        "class_name":        det['class_name'],
+                        "mean_x":            robot_x,
+                        "mean_y":            robot_y,
+                        "mean_embedding":    det['embedding'],
+                        "observation_count": 1,
+                        "first_seen":        now_iso,
+                        "last_seen":         now_iso,
+                    })
+                    cursor.execute("""
+                        SELECT * FROM cypher('maze', $$
+                            CREATE (obj:Object {
+                                object_id:         $object_id,
+                                class_name:        $class_name,
+                                mean_x:            $mean_x,
+                                mean_y:            $mean_y,
+                                mean_embedding:    $mean_embedding,
+                                observation_count: $observation_count,
+                                first_seen:        $first_seen,
+                                last_seen:         $last_seen
                             })
-                            CREATE (kf)-[:HAS_OBSERVATION]->(obs)
-                            CREATE (obs)-[:CORRESPONDS_TO]->(obj)
-                            RETURN obs
-                        $$, %s::agtype) AS (obs agtype)
-                    """, (params,))
+                            RETURN obj.object_id
+                        $$, %s::agtype) AS (object_id agtype)
+                    """, (create_params,))
+                    matched_id = new_obj_id
+
+                # Create Observation node and link it.
+                obs_params = json.dumps({
+                    "kf_id":      kf_id,
+                    "object_id":  matched_id,
+                    "confidence": det['confidence'],
+                    "bbox":       json.dumps(det['bbox']),
+                    "emb_model":  det['embedding_model'],
+                    "embedding":  det['embedding'],
+                    "det_pk":     det['det_pk'],
+                })
+                cursor.execute("""
+                    SELECT * FROM cypher('maze', $$
+                        MATCH (kf:Keyframe {keyframe_id: $kf_id})
+                        MATCH (obj:Object {object_id: $object_id})
+                        CREATE (obs:Observation {
+                            confidence:      $confidence,
+                            bbox:            $bbox,
+                            embedding_model: $emb_model,
+                            embedding:       $embedding,
+                            det_pk:          $det_pk
+                        })
+                        CREATE (kf)-[:HAS_OBSERVATION]->(obs)
+                        CREATE (obs)-[:CORRESPONDS_TO]->(obj)
+                        RETURN obs
+                    $$, %s::agtype) AS (obs agtype)
+                """, (obs_params,))
+
 
             except Exception as e:
 
                 print(f"Exception {e}")
-
-        # Commit changes.
-        try:
-            conn.commit()
-
-        except Exception as e:
-
-            print(f"Exception: {e}")
-
 
     # End of write_to_graph().
 
@@ -323,28 +481,28 @@ class Turtlebot:
         return np.arccos(cos_angle)        
 
     # End of rotation_delta_rad().
-    def write_embeddings(self, conn, detections):                                                                                                                                               
-      cursor = conn.cursor()                                                                                                                                                                  
-      register_vector(conn)                                                                                                                                                                   
-                                                                                                                                                                                              
-      for det in detections:                                                                                                                                                                
-          try:
-              cursor.execute("""
-                  INSERT INTO detection_embeddings (keyframe_id, model, embedding)
-                  VALUES (%s, %s, %s)
-                  ON CONFLICT DO NOTHING                                                                                                                                                      
-              """, (
-                  det['keyframe_id'],                                                                                                                                                         
-                  det['embedding_model'],                                                                                                                                                   
-                  det['embedding']
-              ))
-          except Exception as e:
-              print(f"Failed to write embedding: {e}", flush=True)
-                                                                                                                                                                                              
-      conn.commit()
 
-    # End of write_embeddings().
-    
+    def write_embeddings(self, conn, det_records):         
+                                                   
+        cursor = conn.cursor()                                                                                                                                                                  
+        register_vector(conn)                                                                            
+                                                                                                                                                                                                
+        for rec in det_records:                                                                          
+            try:                                                          
+                cursor.execute("""                                                                                                                                                              
+                    INSERT INTO detection_embeddings (det_pk, model, embedding)                                                                                                                 
+                    VALUES (%s, %s, %s)                                                                                                                                                         
+                    ON CONFLICT DO NOTHING                                                                                                                                                      
+                """, (                     
+                    rec['det_pk'],                                                                                                                                                              
+                    rec['embedding_model'],                                                              
+                    rec['embedding'],                                     
+                ))                                                   
+            except Exception as e:                         
+                print(f"Failed to write embedding: {e}", flush=True)
+                                                                                                                                                                                              
+  # End of write_embeddings().
+
     def slam_pose_callback(self, sample):
 
         # Get JSON from Zenoh Topic.
@@ -446,38 +604,9 @@ class Turtlebot:
                     # Apply L2 norm.
                     image_features = image_features / image_features.norm(dim=-1, keepdim=True) 
                 
-                # Create JSON envelope.
-                json_envelope = {
-                    "event_id": str(uuid.uuid4()),                                                                                                                                                          
-                    "run_id": self.data["run_id"],
-                    "robot_id": self.data["robot_id"],
-                    "sequence": self.data["sequence"],
-                    "odometry": self.data["odometry"],                                                                                                                                                      
-                    "tf": self.data["tf"],            
-                    "keyframe_id": keyframe_id,                                                                                                                                                             
-                    "timestamp": datetime.now().isoformat(),
-                    "map_x": self.data["odometry"]["x"],    
-                    "map_y": self.data["odometry"]["y"],                                                                                                                                                    
-                    "map_yaw": self.data["odometry"]["yaw"],
-                    "detections": []                                                                                                                                                               
-                }        
-                
-                # Write to graph.
-                with psycopg.connect(
-                    f"dbname={dbname} user={user} password={password} host={host} port={port}"
-                    ) as conn:                                                                                                                                                                                  
-                    self.write_to_graph(conn, json_envelope, graph='maze')
+                # No detections.
+                pass
 
-                    # Store embeddings.
-                    self.write_embeddings(conn, detections)
-
-                # Update pose timestamp to now for rate limiting next call                                                                                                                          
-                self.data['pose']['timestamp'] = self.data['slam']['timestamp']
-
-                # Update rotational matrix for next keyframe comparison.
-                self.data['rotational'] = rotational
-                
-            
             else:
 
                 # Something found.
@@ -547,55 +676,50 @@ class Turtlebot:
 
                     '''
                 
-                # If detections publish.
-                if detections:
-                    # Create JSON envelope.
-                    json_envelope = {
-                        "event_id": str(uuid.uuid4()),                                                                                                                                                          
-                        "run_id": self.data["run_id"],
-                        "robot_id": self.data["robot_id"],
-                        "sequence": self.data["sequence"],
-                        "odometry": self.data["odometry"],                                                                                                                                                      
-                        "tf": self.data["tf"],            
-                        "keyframe_id": keyframe_id,                                                                                                                                                             
-                        "timestamp": datetime.now().isoformat(),
-                        "map_x": self.data["odometry"]["x"],    
-                        "map_y": self.data["odometry"]["y"],                                                                                                                                                    
-                        "map_yaw": self.data["odometry"]["yaw"],
-                        "detections": detections                                                                                                                                                               
-                    }    
+        # Build json_envelope.
+        json_envelope = {
+            "event_id": str(uuid.uuid4()),
+            "run_id": self.data["run_id"],
+            "robot_id": self.data["robot_id"],
+            "sequence": self.data["sequence"],
+            "odometry": self.data["odometry"],
+            "tf": self.data["tf"],
+            "keyframe_id": keyframe_id,
+            "timestamp": datetime.now().isoformat(),
+            "map_x": self.data["odometry"]["x"],
+            "map_y": self.data["odometry"]["y"],
+            "map_yaw": self.data["odometry"]["yaw"],
+            "detections": detections
+        }
 
-                    # Set topic.
-                    topic = "tb/detections"
+        # Publish to Zenoh if detections found.
+        if detections:
+            self.session.put("tb/detections", json.dumps(json_envelope).encode())
 
-                    # Serialize the data to JSON
-                    serialized_data = json.dumps(json_envelope)
+        # Single unified DB write.
+        with psycopg.connect(
+            f"dbname={dbname} user={user} password={password} host={host} port={port}"
+        ) as conn:
+            det_records = self.write_detections(conn, json_envelope, detections)
+            self.write_to_graph(conn, json_envelope, det_records, graph='maze')
+            self.write_embeddings(conn, det_records)
+            self.relocalize(conn, det_records)
+            conn.commit()
 
-                    # Publish topic to Zenoh.
-                    self.session.put(topic, serialized_data.encode())
-
-                # Write to graph.
-                with psycopg.connect(
-                    f"dbname={dbname} user={user} password={password} host={host} port={port}"
-                    ) as conn:                                                                                                                                                                                  
-                    self.write_to_graph(conn, json_envelope, graph='maze')
-
-            # Update pose timestamp to now for rate limiting next call                                                                                                                          
-            self.data['pose']['timestamp'] = self.data['slam']['timestamp']
-
-            # Update rotational matrix for next keyframe comparison.
-            self.data['rotational'] = rotational  
+        self.data['pose']['timestamp'] = self.data['slam']['timestamp']
+        self.data['rotational'] = rotational
 
         ##  DBSCAN ##
             
-            '''
-                Online DBSCAN as described will fail.  
-                We sample the environemnt every 0.5m, but have a grouping radius of 1.5m.
-                Therefore, online DBSCAN will simple grow one group out infinitely.
-                I am switching to offline DBSCAN for group clustering assignments.
-                This will provide information for the remapping function.
+        '''
+            Online DBSCAN as described will fail.  
+            We sample the environemnt every 0.5m, but have a grouping radius of 1.5m.
+            Therefore, online DBSCAN will simple grow one group out infinitely.
+            I am switching to offline DBSCAN for group clustering assignments.
+            This will provide information for the remapping function.
 
-            ''' 
+        ''' 
+        
     # End of slam_pose_callback().
 
     def slam_status_callback(self, sample):
@@ -763,147 +887,102 @@ class Turtlebot:
     
     # End of detections_callback().
 
-    def write_detections(self, sample):
+    def write_detections(self, conn, json_envelope, detections):
     # Write json to db.
 
-        data = json.loads(sample.payload.to_bytes())
+        cursor = conn.cursor()
 
-        # Insert the data into PostgreSQL
+        image    = self.data["image"]
+        odometry = self.data["odometry"]
+        stamp    = image["stamp"]
+
+        time_in_run = datetime.fromtimestamp(
+            stamp["sec"] + stamp["nanosec"] * 1e-9, timezone.utc
+        )
+
+        success, encoded = cv2.imencode('.jpg', self.data['image']['current_image'])
+        img_bytes = encoded.tobytes() if success else None
+
         try:
-            with psycopg.connect(
-                f"dbname={dbname} user={user} password={password} host={host} port={port}"
-            ) as conn:
-                cursor = conn.cursor()
-
-                # Prepare the INSERT query for the detection_events table
-                insert_event_query = """
-                    INSERT INTO detection_events (
-                        event_id, run_id, robot_id, sequence, time_in_run,
-                        image_frame_id, image_sha256, width, height, encoding,
-                        x, y, yaw, vx, vy, wz,
-                        tf_ok, t_base_camera, raw_event, image_raw
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (event_id) DO NOTHING;
-                """
-
-                # Extract relevant data from the input JSON
-                event_id = data["event_id"]
-                run_id = data["run_id"]
-                robot_id = data["robot_id"]
-                sequence = data["sequence"]
-
-                # Image-related data
-                image_frame_id = data["image"]["frame_id"]
-                image_sha256 = data["image"]["sha256"]
-                width = data["image"]["width"]
-                height = data["image"]["height"]
-                encoding = data["image"]["encoding"]
-                #time_in_run = data["image"]["stamp"]
-
-                # Convert stamp to datetime with timezone awareness
-                time_in_run = datetime.fromtimestamp(
-                    data["image"]["stamp"]["sec"] + data["image"]["stamp"]["nanosec"] * 1e-9,
-                    timezone.utc
-                )
-
-                # Odometry data
-                odometry = data["odometry"]
-
-                # Round off floats.
-                x = round(odometry["x"], 4)
-                y = round(odometry["y"], 4)
-                yaw = round(odometry["yaw"], 4)
-                vx = round(odometry["vx"], 4)
-                vy = round(odometry["vy"], 4)
-                wz = round(odometry["wz"], 4)
-
-                # Transform data
-                tf_ok = data["tf"]["tf_ok"]
-                t_base_camera = data["tf"]["t_base_camera"]
-
-
-                # Prepare raw_event as JSONB
-                raw_event = json.dumps(data)  # Convert the entire input JSON to a string
-               
-               # Prepare image.
-                success, encoded = cv2.imencode('.jpg', self.data['image']['current_image'])                                                                                                                                 
-                img_bytes = encoded.tobytes() if success else None 
-
-                # Execute the query to insert the event data
-                try:
-                    cursor.execute(insert_event_query, (
-                        event_id, run_id, robot_id, sequence, time_in_run,
-                        image_frame_id, image_sha256, width, height, encoding,
-                        x, y, yaw, vx, vy, wz,
-                        tf_ok, t_base_camera, raw_event, img_bytes
-                    ))
-                except Exception as e:
-                    print(f"Failed to write to detection_events.  Error: {e}")
-                    return
-                
-                # Get detections.
-                detection = data["detections"]
-     
-                det_id = detection["det_id"]
-                class_id = detection["class_id"]
-                class_name = detection["class_name"]
-                confidence = detection["confidence"]
-                x1, y1, x2, y2 = detection["bbox_xyxy"]
-
-                # Round off floats.
-                confidence = round(confidence, 3)
-                x1 = round(x1)
-                y1 = round(y1)
-                x2 = round(x2)
-                y2 = round(y2)
-
-                
-                # # Insert detection data into the detections table
-                # cursor.execute(insert_detection_query, (
-                #     event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
-                # ))
-
-                # Only write in rows of new data.  Omit already recorded detections.
-                insert_detection_query = """                                                                                                                                                                
-                    INSERT INTO detections (event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (x1, y1, x2, y2)
-                        DO UPDATE SET
-                            det_id     = EXCLUDED.det_id,
-                            class_id   = EXCLUDED.class_id,
-                            class_name = EXCLUDED.class_name,
-                            confidence = EXCLUDED.confidence
-                        WHERE EXCLUDED.confidence > detections.confidence;
-                """
-
-                # Try to write to 'detections'.  If not, then duplicate entry and don't write to 'detection_events'.
-                try:
-                
-                    # Insert detection data into the detections table
-                    cursor.execute(insert_detection_query, (
-                        event_id, det_id, class_id, class_name, confidence, x1, y1, x2, y2
-                    ))
-                
-                    # If didn't write with no exception don't write to detection_events.
-                    if cursor.rowcount == 0:                                                                                                                                                                
-                        print(f"Detection skipped: existing bbox {x1,y1,x2,y2} has higher confidence.", flush=True)                                                                                         
-                        return 
-                    
-                except psycopg.errors.UniqueViolation:                                                                                                                                                      
-                    print(f"Uniqueness conflict on detections. Aborting.", flush=True)                                                                                                                      
-                    return      
-                
-                except Exception as e:                                                                                                                                                                      
-                    print(f"Failed to write to detections. Aborting. Error: {e}", flush=True)                                                                                                               
-                    return 
-
-                
-                # Commit the transaction to save the data in the database
-                conn.commit()
-                #print("Data inserted successfully!")
-
+            cursor.execute("""
+                INSERT INTO detection_events (
+                    event_id, run_id, robot_id, sequence, time_in_run,
+                    image_frame_id, image_sha256, width, height, encoding,
+                    x, y, yaw, vx, vy, wz,
+                    tf_ok, t_base_camera, raw_event, image_raw
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (event_id) DO NOTHING
+            """, (
+                json_envelope["event_id"],
+                json_envelope["run_id"],
+                json_envelope["robot_id"],
+                json_envelope["sequence"],
+                time_in_run,
+                image["frame_id"],
+                image["sha256"],
+                image["width"],
+                image["height"],
+                image["encoding"],
+                round(odometry["x"],   2),
+                round(odometry["y"],   2),
+                round(odometry["yaw"], 2),
+                round(odometry["vx"],  2),
+                round(odometry["vy"],  2),
+                round(odometry["wz"],  2),
+                self.data["tf"]["tf_ok"],
+                self.data["tf"]["t_base_camera"],
+                json.dumps(json_envelope),
+                img_bytes,
+            ))
         except Exception as e:
-            print(f"Error inserting data: {e}")
+            print(f"Failed to write detection_events: {e}", flush=True)
+            return []
+
+        # --- detections (one row per detection, returns det_pk) ---
+        results = []
+        for det in detections:
+            confidence = round(det['confidence'], 3)
+            x1, y1, x2, y2 = [round(v) for v in det['bbox']]
+
+            try:
+                cursor.execute("""
+                    INSERT INTO detections (event_id, det_id, class_name, confidence, x1, y1, x2, y2)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (x1, y1, x2, y2)
+                    DO UPDATE SET
+                        det_id     = EXCLUDED.det_id,
+                        class_name = EXCLUDED.class_name,
+                        confidence = EXCLUDED.confidence
+                    WHERE EXCLUDED.confidence > detections.confidence
+                    RETURNING det_pk
+                """, (
+                    json_envelope["event_id"],
+                    str(uuid.uuid4()),
+                    det['class'],
+                    confidence,
+                    x1, y1, x2, y2,
+                ))
+
+                row = cursor.fetchone()
+                if row is None:
+                    print(f"Detection skipped (lower confidence): {det['class']} {x1,y1,x2,y2}", flush=True)
+                    continue
+
+                results.append({                                                                                                                                                            
+                    'det_pk':          row[0],         
+                    'class_name':      det['class'],                                                                                                                                        
+                    'confidence':      det['confidence'],
+                    'bbox':            det['bbox'],      
+                    'embedding':       det['embedding'],
+                    'embedding_model': det['embedding_model'],
+                })
+
+            except Exception as e:
+                print(f"Failed to write detection: {e}", flush=True)
+                continue
+
+        return results
 
     # End of write_detections().
 
@@ -941,16 +1020,15 @@ def detect_objects(turtlebot):
     # Run pipeline.
     turtlebot.run()
 
+def ag(v):                                                                                                                                                                                  
+    if v is None: return None                                                                                                                                                               
+    s = str(v)                                                                                                                                                                              
+    return s.strip('"')
+
+# End of ag().
 
 def dbscan():
         # This function performs dbscan on the sampled space.
-
-        def ag(v):                                                                                                                                                                                  
-            if v is None: return None                                                                                                                                                               
-            s = str(v)                                                                                                                                                                              
-            return s.strip('"')
-
-        # End of ag().
 
         def parse_node(v):                                                                                                                                                                          
             s = str(v)                                                                                                                                                                              
@@ -985,7 +1063,7 @@ def dbscan():
                             **props,                                                                                                                                                                            
                             'x': float(ag(row[1])),
                             'y': float(ag(row[2])),                                                                                                                                                             
-                            'dbscan_group': int(ag(row[3]))
+                            'dbscan_group': int(ag(row[3])) if ag(row[3]) is not None else -1 
                         }                                                                                                                                                                                       
                         for row in cursor.fetchall()
                     }      
@@ -1062,6 +1140,86 @@ def dbscan():
 
                     conn.commit()    
                     print(f"DBSCAN complete. Assigned {len(det_cluster)} keyframes.", flush=True)
+
+                    # --- Build Place nodes ---
+                    groups = set(det_cluster.values())
+                    for group_id in groups:
+                        # Compute centroid of all keyframes in this group.
+                        coords_in_group = [
+                            (props['x'], props['y'])
+                            for kf_id, props in all_kfs.items()
+                            if det_cluster.get(kf_id) == group_id
+                        ]
+                        cx = sum(c[0] for c in coords_in_group) / len(coords_in_group)
+                        cy = sum(c[1] for c in coords_in_group) / len(coords_in_group)
+
+                        place_params = json.dumps({
+                            "place_id":  f"place_{group_id}",
+                            "group_id":  group_id,
+                            "centroid_x": cx,
+                            "centroid_y": cy,
+                        })
+                        cursor.execute("""
+                            SELECT * FROM cypher('maze', $$
+                                MERGE (pl:Place {place_id: $place_id})
+                                SET pl.group_id   = $group_id,
+                                    pl.centroid_x = $centroid_x,
+                                    pl.centroid_y = $centroid_y
+                                RETURN pl
+                            $$, %s::agtype) AS (pl agtype)
+                        """, (place_params,))
+
+                    # --- Link Keyframes to Places ---
+                    for kf_id, group_id in det_cluster.items():
+                        kf_place_params = json.dumps({
+                            "kf_id":    kf_id,
+                            "place_id": f"place_{group_id}",
+                        })
+                        cursor.execute("""
+                            SELECT * FROM cypher('maze', $$
+                                MATCH (kf:Keyframe {keyframe_id: $kf_id})
+                                MATCH (pl:Place {place_id: $place_id})
+                                MERGE (kf)-[:LOCATED_IN]->(pl)
+                                RETURN kf
+                            $$, %s::agtype) AS (kf agtype)
+                        """, (kf_place_params,))
+
+                    # --- Place adjacency edges ---
+                    # Two places are adjacent if any of their keyframes are within 2*db_eps of each other.
+                    group_ids = list(groups)
+                    for i in range(len(group_ids)):
+                        for j in range(i + 1, len(group_ids)):
+                            ga, gb = group_ids[i], group_ids[j]
+                            coords_a = np.array([
+                                (props['x'], props['y'])
+                                for kf_id, props in all_kfs.items()
+                                if det_cluster.get(kf_id) == ga
+                            ])
+                            coords_b = np.array([
+                                (props['x'], props['y'])
+                                for kf_id, props in all_kfs.items()
+                                if det_cluster.get(kf_id) == gb
+                            ])
+                            tree_b = cKDTree(coords_b)
+                            dists, _ = tree_b.query(coords_a)
+                            if dists.min() <= 2 * db_eps:
+                                adj_params = json.dumps({
+                                    "place_a": f"place_{ga}",
+                                    "place_b": f"place_{gb}",
+                                })
+                                cursor.execute("""
+                                    SELECT * FROM cypher('maze', $$
+                                        MATCH (pa:Place {place_id: $place_a})
+                                        MATCH (pb:Place {place_id: $place_b})
+                                        MERGE (pa)-[:ADJACENT_TO]->(pb)
+                                        MERGE (pb)-[:ADJACENT_TO]->(pa)
+                                        RETURN pa
+                                    $$, %s::agtype) AS (pa agtype)
+                                """, (adj_params,))
+
+                    conn.commit()
+                    print(f"Places built: {len(groups)} groups, adjacency edges added.", flush=True)
+
         
         except Exception as e:
           print(f"DBSCAN thread exception: {e}", flush=True)                                                                                                                                  
@@ -1097,6 +1255,6 @@ if __name__ == "__main__":
           slam_counter
       )     
     
-    
+    # Detect objects as we go.
     detect_objects(turtlebot)
 
