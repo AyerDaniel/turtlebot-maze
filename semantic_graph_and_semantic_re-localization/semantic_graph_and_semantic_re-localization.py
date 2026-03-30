@@ -104,7 +104,7 @@ class Turtlebot:
         conf = zenoh.Config()
         conf.insert_json5("connect/endpoints", '["tcp/localhost:7447"]')
 
-        # Run YOLOv8 inference on the frame to produce bounding boxes
+        # Instantiate YOLOv8 model.
         self.yolo_model = YOLO('yolov8n.pt') 
 
         # Set device and model to create embeddings.
@@ -143,20 +143,18 @@ class Turtlebot:
         print(f"Subscribed to: tf", flush=True)
 
         # Subscribe to SLAM.
-        self.sub_slam = self.session.declare_subscriber("tb/slam/pose", self.slam_pose_callback)
+        self.sub_slam_pose = self.session.declare_subscriber("tb/slam/pose", self.slam_pose_callback)
         print(f"Subscribed to slam/pose", flush=True)
 
-        self.sub_slam = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
+        self.sub_slam_status = self.session.declare_subscriber("tb/slam/status", self.slam_status_callback)
         print(f"Subscribed to slam/status", flush=True)
 
     # End of zenoh subscribing.
 
-    def relocalize(self, conn, det_records):
-        """Given det_records from the current keyframe, find the top-3 most likely Places.
+    def relocalize(self, conn, det_records, robot_pose):
 
-        Uses pgvector KNN to find visually similar stored embeddings, follows
-        Observation → Object → Keyframe → Place via dbscan_group on the Pose node.
-        """
+        print("Relocalizing to map:\n")
+        
         if not det_records:
             return
 
@@ -212,6 +210,8 @@ class Turtlebot:
 
         # Rank and print top-3.
         ranked = sorted(place_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        rx, ry = robot_pose
+        print(f"Relocalize — robot pose: ({rx:.3f}, {ry:.3f})")   
         print(f"Relocalize — top-3 candidate places:", flush=True)
         for rank, (group_id, score) in enumerate(ranked, 1):
             # Get centroid of this place's keyframes for pose hypothesis.
@@ -226,7 +226,8 @@ class Turtlebot:
             if place_row:
                 cx = ag(place_row[0])
                 cy = ag(place_row[1])
-                print(f"  #{rank} place_{group_id}  score={score:.3f}  pose=({cx}, {cy})", flush=True)
+                err = np.sqrt((rx - float(cx))**2 + (ry - float(cy))**2)                                                                                                                            
+                print(f"  #{rank} place_{group_id}  score={score:.3f}  pose=({cx}, {cy})  err={err:.3f}m")
             else:
                 print(f"  #{rank} place_{group_id}  score={score:.3f}", flush=True)
 
@@ -345,12 +346,14 @@ class Turtlebot:
             """, (params,))
         
         except Exception as e:
+            print(f"Exception creating Keyframe/Pose: {e}", flush=True)                                                                                                                             
+            return
 
-            print(f"Exception {e}")
+        robot_x = json_['map_x']
+        robot_y = json_['map_y']
 
+        for det in det_records: 
             try:
-                robot_x = json_['map_x']
-                robot_y = json_['map_y']
                 emb = np.array(det['embedding'])
 
                 fusion_params = json.dumps({"class_name": det['class_name']})
@@ -504,7 +507,7 @@ class Turtlebot:
   # End of write_embeddings().
 
     def slam_pose_callback(self, sample):
-
+        
         # Get JSON from Zenoh Topic.
         data = json.loads(bytes(sample.payload))
             
@@ -516,8 +519,9 @@ class Turtlebot:
         # Set time window to ignore new images in ms.
         del_t = 100  # In miliseconds.
 
-        # Rate limit check - if less than 100 ms since the last frame was considered, skip immediately #                                                                                                                                                                   
-        if self.data['slam']['timestamp'] - self.data['pose']['timestamp'] <= 0.01 * del_t:
+        # Rate limit check - if less than 100 ms since the last frame was considered, skip immediately #
+        now = time.time()                                                                                                                                                                   
+        if  now - self.data['pose']['timestamp'] <= del_t / 1000: # in ms.
             # Not enough time has elapsed.
             return
 
@@ -561,7 +565,7 @@ class Turtlebot:
             return
         
         ####  All checks passed ###           
-
+        
         # Deserialize the CDR-encoded image and decode it to a numpy array.
 
         '''
@@ -696,17 +700,28 @@ class Turtlebot:
         if detections:
             self.session.put("tb/detections", json.dumps(json_envelope).encode())
 
-        # Single unified DB write.
-        with psycopg.connect(
-            f"dbname={dbname} user={user} password={password} host={host} port={port}"
-        ) as conn:
-            det_records = self.write_detections(conn, json_envelope, detections)
-            self.write_to_graph(conn, json_envelope, det_records, graph='maze')
-            self.write_embeddings(conn, det_records)
-            self.relocalize(conn, det_records)
-            conn.commit()
+        # Two calls.  One is writing.  The other reading.  One performance before comit() was causing odd race condition errors.
+        try:
+            with psycopg.connect(
+                    f"dbname={dbname} user={user} password={password} host={host} port={port}"
+                ) as conn:
+                    det_records = self.write_detections(conn, json_envelope, detections)
+                    self.write_to_graph(conn, json_envelope, det_records, graph='maze')
+                    self.write_embeddings(conn, det_records)
+                    conn.commit()
 
-        self.data['pose']['timestamp'] = self.data['slam']['timestamp']
+            with psycopg.connect(
+                    f"dbname={dbname} user={user} password={password} host={host} port={port}"
+                ) as conn:
+                    self.relocalize(conn, det_records, (json_envelope['map_x'],json_envelope['map_y']))
+
+        except Exception as e:    
+
+            import traceback  
+            print(f"DB write failed: {e}", flush=True)                                                                                                                                              
+            traceback.print_exc()  
+
+        self.data['pose']['timestamp'] = now
         self.data['rotational'] = rotational
 
         ##  DBSCAN ##
@@ -999,26 +1014,14 @@ class Turtlebot:
 
             self.sub_images.undeclare()
             self.sub_detections.undeclare()
+            self.sub_slam_pose.undeclare()                                                                                                                                                              
+            self.sub_slam_status.undeclare()  
             # self.sub_maze_detections.undeclare()
             self.sub_robot_state.undeclare()
             self.sub_TF.undeclare()
 
             self.session.close()
             print("Monitor stopped.", flush=True)
-
-def detect_objects(turtlebot):
-
-    '''
-        
-        This function assumes zenoh-router, zenoh-bridge, dectector, demo-world-enhanced containers are running.
-
-    '''
-
-    # Init rclpy.
-    rclpy.init() 
-
-    # Run pipeline.
-    turtlebot.run()
 
 def ag(v):                                                                                                                                                                                  
     if v is None: return None                                                                                                                                                               
@@ -1247,14 +1250,15 @@ if __name__ == "__main__":
     # Instantiate bot.
     turtlebot = Turtlebot(table, show_camera=False)
 
-    # Run dbscan.
-
-    # Subscribe to Zenoh topic. 
+    # Subscribe to Zenoh topic to run dbscan in slam_counter.  dbscan runs every n topic receipts.
     sub = turtlebot.session.declare_subscriber(                                                                                                                                             
           "tb/slam/pose",
           slam_counter
       )     
     
-    # Detect objects as we go.
-    detect_objects(turtlebot)
+    # Init rclpy.
+    rclpy.init() 
+
+    # Run pipeline.
+    turtlebot.run()
 
